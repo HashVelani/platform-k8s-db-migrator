@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# pre-commit hook: check-liquibase-disabled
+#
+# Blocks commits that enable Liquibase auto-migration in application config files.
+# Blocks:
+#   spring.liquibase.enabled=true
+#   quarkus.liquibase.migrate-at-start=true
+#   micronaut.liquibase.enabled=true
+#
+# Exits 1 (blocking the commit) if any violation is found.
+
+set -euo pipefail
+
+PATTERNS=(
+    "spring\.liquibase\.enabled=true"
+    "quarkus\.liquibase\.migrate-at-start=true"
+    "micronaut\.liquibase\.enabled=true"
+)
+
+FILE_EXTENSIONS=("*.yaml" "*.yml" "*.properties")
+
+violations=()
+
+for ext in "${FILE_EXTENSIONS[@]}"; do
+    # Find all staged files matching the extension.
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        for pattern in "${PATTERNS[@]}"; do
+            if grep -qE "$pattern" "$file" 2>/dev/null; then
+                violations+=("$file: matches forbidden pattern '$pattern'")
+            fi
+        done
+    done < <(git diff --cached --name-only --diff-filter=ACM | grep -E "${ext//\*/.*}" || true)
+done
+
+if [[ ${#violations[@]} -gt 0 ]]; then
+    echo "ERROR: Liquibase auto-migration must not be enabled in application config."
+    echo "The platform-k8s-db-migrator framework manages all migrations."
+    echo ""
+    for v in "${violations[@]}"; do
+        echo "  $v"
+    done
+    echo ""
+    echo "Fix: set the relevant property to 'false' or remove it."
+    exit 1
+fi
+
+exit 0

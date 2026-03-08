@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: migration-trigger-sa-binding
+  namespace: placeholder
+  labels:
+    platform/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: migration-job-creator
+subjects:
+  - kind: ServiceAccount
+    name: migration-trigger-sa
+    namespace: placeholder

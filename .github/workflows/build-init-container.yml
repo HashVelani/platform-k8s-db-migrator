@@ -261,7 +261,7 @@ jobs:
             -e CHANGELOG_DEST_PATH=/changelogs \
             -e SERVICE_NAME=smoke-test \
             -e SERVICE_IMAGE=smoke-test:latest \
-            -e SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/smoketest \
+            -e SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/smoketest?sslmode=disable \
             -e SPRING_DATASOURCE_USERNAME=smoketest \
             -e SPRING_DATASOURCE_PASSWORD=smoketest \
             "${{ steps.tags.outputs.primary }}"
@@ -286,7 +286,7 @@ jobs:
             -e CHANGELOG_DEST_PATH=/changelogs \
             -e SERVICE_NAME=smoke-test-no-changelogs \
             -e SERVICE_IMAGE=smoke-test:latest \
-            -e SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/smoketest \
+            -e SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/smoketest?sslmode=disable \
             -e SPRING_DATASOURCE_USERNAME=smoketest \
             -e SPRING_DATASOURCE_PASSWORD=smoketest \
             "${{ steps.tags.outputs.primary }}"

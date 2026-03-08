@@ -71,6 +71,79 @@ func TestCopyChangelogs_EmptySrc(t *testing.T) {
 	}
 }
 
+func TestCopyChangelogs_DeeplyNested(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+
+	deep := filepath.Join(src, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(deep, "deep.xml"), "<deep/>")
+
+	if err := CopyChangelogs(src, dest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertFileContent(t, filepath.Join(dest, "a", "b", "c", "deep.xml"), "<deep/>")
+}
+
+func TestCopyChangelogs_OverwritesExistingFile(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+
+	writeFile(t, filepath.Join(src, "v1.xml"), "new-content")
+	// Pre-populate dest with stale content.
+	writeFile(t, filepath.Join(dest, "v1.xml"), "stale-content")
+
+	if err := CopyChangelogs(src, dest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertFileContent(t, filepath.Join(dest, "v1.xml"), "new-content")
+}
+
+func TestCopyChangelogs_PreservesFileMode(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+
+	srcFile := filepath.Join(src, "script.sh")
+	writeFile(t, srcFile, "#!/bin/sh")
+	if err := os.Chmod(srcFile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CopyChangelogs(src, dest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dest, "script.sh"))
+	if err != nil {
+		t.Fatalf("cannot stat copied file: %v", err)
+	}
+	// Mask to permission bits only.
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Errorf("expected mode 0755, got %04o", got)
+	}
+}
+
+func TestCopyChangelogs_MultipleFilesAtRoot(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+
+	for _, name := range []string{"a.xml", "b.xml", "c.xml"} {
+		writeFile(t, filepath.Join(src, name), name)
+	}
+
+	if err := CopyChangelogs(src, dest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, name := range []string{"a.xml", "b.xml", "c.xml"} {
+		assertFileContent(t, filepath.Join(dest, name), name)
+	}
+}
+
 // helpers
 
 func writeFile(t *testing.T, path, content string) {

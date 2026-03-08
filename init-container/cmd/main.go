@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -11,14 +12,35 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
+	if err := run(os.Getenv); err != nil {
+		slog.Error("init container failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+// run is the testable entry point. getenv is injected so tests can supply
+// controlled environment variables without modifying the real process env.
+func run(getenv func(string) string) error {
 	slog.Info("platform-k8s-db-migrator init container starting")
 
 	// ── Phase 1: copy changelogs from service image into shared emptyDir ──────
 
-	src := requireEnv("CHANGELOG_SOURCE_PATH")
-	dest := requireEnv("CHANGELOG_DEST_PATH")
-	serviceName := requireEnv("SERVICE_NAME")
-	serviceImage := requireEnv("SERVICE_IMAGE")
+	src, err := mustGetenv(getenv, "CHANGELOG_SOURCE_PATH")
+	if err != nil {
+		return err
+	}
+	dest, err := mustGetenv(getenv, "CHANGELOG_DEST_PATH")
+	if err != nil {
+		return err
+	}
+	serviceName, err := mustGetenv(getenv, "SERVICE_NAME")
+	if err != nil {
+		return err
+	}
+	serviceImage, err := mustGetenv(getenv, "SERVICE_IMAGE")
+	if err != nil {
+		return err
+	}
 
 	slog.Info("copying changelogs",
 		"service", serviceName,
@@ -28,8 +50,7 @@ func main() {
 	)
 
 	if err := copy.CopyChangelogs(src, dest); err != nil {
-		slog.Error("failed to copy changelogs", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to copy changelogs: %w", err)
 	}
 
 	slog.Info("changelogs copied successfully",
@@ -49,14 +70,16 @@ func main() {
 	// 6. write Action to CHANGELOG_DEST_PATH/migration-action.txt
 	//    so liquibase runner main container can read it
 	// 7. exit 0
+
+	return nil
 }
 
-// requireEnv reads an environment variable and exits with a clear message if it is not set.
-func requireEnv(key string) string {
-	val := os.Getenv(key)
+// mustGetenv returns the value of the environment variable named by key, or
+// an error if the variable is empty or unset.
+func mustGetenv(getenv func(string) string, key string) (string, error) {
+	val := getenv(key)
 	if val == "" {
-		slog.Error("required environment variable is not set", "var", key)
-		os.Exit(1)
+		return "", fmt.Errorf("required environment variable %q is not set", key)
 	}
-	return val
+	return val, nil
 }

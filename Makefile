@@ -6,7 +6,7 @@ build:
 
 ## test: run all unit tests
 test:
-	cd init-container && go test ./...
+	cd init-container && go test -v -race -count=1 ./...
 
 ## lint: run golangci-lint
 lint:

@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/your-org/platform-k8s-db-migrator/init-container/internal/copy"
+	"github.com/your-org/platform-k8s-db-migrator/init-container/internal/db"
+	"github.com/your-org/platform-k8s-db-migrator/init-container/internal/decision"
 )
 
 func main() {
@@ -18,9 +23,15 @@ func main() {
 	}
 }
 
-// run is the testable entry point. getenv is injected so tests can supply
-// controlled environment variables without modifying the real process env.
+// run is the production entry point. It wires the real database querier into
+// execute so that main() stays a three-line wrapper.
 func run(getenv func(string) string) error {
+	return execute(getenv, db.GetLatestChangeset)
+}
+
+// execute is the testable core. queryDB is injected so tests can supply a
+// controlled implementation without requiring a live PostgreSQL instance.
+func execute(getenv func(string) string, queryDB func(context.Context, string) (string, error)) error {
 	slog.Info("platform-k8s-db-migrator init container starting")
 
 	// ── Phase 1: copy changelogs from service image into shared emptyDir ──────
@@ -59,17 +70,75 @@ func run(getenv func(string) string) error {
 		"dest", dest,
 	)
 
-	// ── Phase 2 stub ──────────────────────────────────────────────────────────
-	// TODO Phase 2: implement region-aware logic
+	// ── Phase 2: query DB state and decide migration action ───────────────────
+	// Region detection is Phase 4 — not checked here.
+
+	dbURL, err := mustGetenv(getenv, "DB_URL")
+	if err != nil {
+		return err
+	}
+	dbUsername, err := mustGetenv(getenv, "DB_USERNAME")
+	if err != nil {
+		return err
+	}
+	dbPassword, err := mustGetenv(getenv, "DB_PASSWORD")
+	if err != nil {
+		return err
+	}
+
+	dsn, err := db.ParseDSN(dbURL, dbUsername, dbPassword)
+	if err != nil {
+		return fmt.Errorf("invalid database URL: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	latestChangeset, err := queryDB(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("failed to query database: %w", err)
+	}
+
+	slog.Info("database state retrieved",
+		"service", serviceName,
+		"latestChangeset", latestChangeset,
+	)
+
+	action, err := decision.Decide(latestChangeset)
+	if err != nil {
+		return fmt.Errorf("failed to determine migration action: %w", err)
+	}
+
+	// Write the action to a file so the Liquibase main container can read it.
+	actionFile := filepath.Join(dest, "migration-action.txt")
+	if err := os.WriteFile(actionFile, []byte(action), 0o644); err != nil {
+		return fmt.Errorf("failed to write migration action file: %w", err)
+	}
+
+	switch action {
+	case decision.ActionUpdate:
+		slog.Info("migration action: update — database is behind the changelog",
+			"service", serviceName,
+			"action", action,
+		)
+	case decision.ActionNone:
+		slog.Info("migration action: none — database is already up to date",
+			"service", serviceName,
+			"action", action,
+		)
+	}
+
+	// ── Phase 3 stub ──────────────────────────────────────────────────────────
+	// TODO Phase 3: implement rollback detection
+	// Compare latestChangeset against the changelog files to detect when the
+	// deployed changelog is behind the DB (rollback scenario). Write "rollback"
+	// to migration-action.txt so the Liquibase runner can apply rollback scripts.
+
+	// ── Phase 4 stub ──────────────────────────────────────────────────────────
+	// TODO Phase 4: implement region-based block logic
 	// 1. call region.Detect() → returns RegionRole (primary | replica)
-	// 2. call db.GetLatestChangeset() → returns current DB state
-	// 3. call decision.Decide(regionRole, dbState, changelogPath)
-	//    → returns Action (update | rollback | none | block)
-	// 4. if Action == block → log clear message, exit 1
-	// 5. if Action == none  → log up to date, exit 0
-	// 6. write Action to CHANGELOG_DEST_PATH/migration-action.txt
-	//    so liquibase runner main container can read it
-	// 7. exit 0
+	// 2. if replica and schema mismatch → write "block" to migration-action.txt,
+	//    log "Schema mismatch in replica region. Sync EUW1 first.", exit 1
 
 	return nil
 }

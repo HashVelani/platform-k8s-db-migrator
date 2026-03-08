@@ -93,11 +93,22 @@ spec:
             - name: SERVICE_NAME
               value: <service-name>
             - name: SERVICE_IMAGE
-              value: <ECR_REGISTRY>/<service-name>:<image-tag>
-            - name: REGION_ROLE
-              value: primary          # patched per overlay: primary | replica
-            - name: REGION
-              value: eu-west-1        # patched per overlay
+              value: <your-registry>/<service-name>:<image-tag>
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: <service-name>-db-secret
+                  key: url
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: <service-name>-db-secret
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: <service-name>-db-secret
+                  key: password
           volumeMounts:
             - name: changelogs
               mountPath: /changelogs

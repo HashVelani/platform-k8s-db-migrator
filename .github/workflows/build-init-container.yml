@@ -1,0 +1,247 @@
+name: Build init-container
+
+on:
+  push:
+    branches:
+      - "**"   # tests run on every branch push; image is only built/pushed on main (see build-and-push)
+    tags:
+      - "v*"   # semver release — build, push, and smoke-test the image
+  pull_request:
+    branches:
+      - main
+
+env:
+  DOCKERHUB_REPOSITORY: hashvelani/platform-k8s-db-migrator
+
+jobs:
+  # ── 1. Unit tests + coverage report (every branch, every PR) ────────────────
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: init-container/go.mod
+          cache-dependency-path: init-container/go.sum
+
+      - name: Run unit tests with coverage
+        working-directory: init-container
+        run: |
+          go test -v -race -count=1 \
+            -coverprofile=coverage.out \
+            -covermode=atomic \
+            ./...
+
+      - name: Print per-function coverage to log
+        working-directory: init-container
+        run: go tool cover -func=coverage.out
+
+      - name: Write coverage summary to job summary
+        working-directory: init-container
+        run: |
+          echo "## 📊 Unit Test Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Package / Function | Coverage |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | awk '
+            NR > 1 {
+              gsub(/github\.com\/your-org\/platform-k8s-db-migrator\/init-container\//, "", $1)
+              pct_str = $NF
+              pct = pct_str
+              gsub(/%$/, "", pct)
+              cov = pct + 0
+              if (cov >= 100.0)     icon = "🟢"
+              else if (cov >= 80.0) icon = "🟡"
+              else                  icon = "🔴"
+              printf "| `%s` | %s %s |\n", $1, icon, pct_str
+            }
+          ' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate HTML coverage report
+        working-directory: init-container
+        run: go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload coverage report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            init-container/coverage.out
+            init-container/coverage.html
+          retention-days: 30
+
+  # ── 2. Integration tests (every branch, every PR) ───────────────────────────
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: init-container/go.mod
+          cache-dependency-path: init-container/go.sum
+
+      - name: Run integration tests
+        working-directory: init-container
+        run: go test -v -race -count=1 -tags=integration ./...
+
+  # ── 3. Build, push, smoke-test — main branch and semver tags only ───────────
+  #
+  # Feature branches: this job is skipped. Tests above still run.
+  # main push:   image tagged  <repo>:<short-sha>  +  <repo>:latest
+  # v* tag push: image tagged  <repo>:<short-sha>  +  <repo>:<semver>  +  <repo>:latest
+  build-and-push:
+    name: Build, push and smoke-test image
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: smoketest
+          POSTGRES_USER: smoketest
+          POSTGRES_PASSWORD: smoketest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U smoketest"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine image tags
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          SHA_TAG="${DOCKERHUB_REPOSITORY}:${SHORT_SHA}"
+
+          # Every publish gets a short-SHA tag so every image is individually
+          # addressable by the commit that produced it.
+          TAGS="${SHA_TAG}"
+
+          # main branch: also tag as :latest so the most recent stable build
+          # is always reachable without knowing the SHA.
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            TAGS="${TAGS},${DOCKERHUB_REPOSITORY}:latest"
+          fi
+
+          # Semver tag (e.g. v1.2.3): also tag with the version string so teams
+          # can pin to a specific release in their GitOps manifests.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAGS="${TAGS},${DOCKERHUB_REPOSITORY}:${GITHUB_REF_NAME}"
+            TAGS="${TAGS},${DOCKERHUB_REPOSITORY}:latest"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          # The short-SHA tag is always produced; use it to pull the image in
+          # the smoke test so we know we're testing exactly what was just pushed.
+          echo "primary=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: init-container
+          file: init-container/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+
+      - name: Annotate build summary with image tags
+        run: |
+          echo "## 🐳 Image Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Short SHA:** \`${{ steps.tags.outputs.short_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Tags pushed:**" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.tags.outputs.tags }}" | tr ',' '\n' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Container smoke test ────────────────────────────────────────────────
+      - name: Prepare smoke-test directories
+        run: |
+          mkdir -p /tmp/smoke/src /tmp/smoke/dest
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog">' \
+            '  <changeSet id="1-smoke" author="ci">' \
+            '    <createTable tableName="smoke_test">' \
+            '      <column name="id" type="BIGINT"/>' \
+            '    </createTable>' \
+            '  </changeSet>' \
+            '</databaseChangeLog>' \
+            > /tmp/smoke/src/changelog-master.xml
+
+      - name: Smoke test — fresh database expects action=update
+        run: |
+          docker run --rm \
+            --network host \
+            -v /tmp/smoke/src:/db/changelog:ro \
+            -v /tmp/smoke/dest:/changelogs \
+            -e CHANGELOG_SOURCE_PATH=/db/changelog \
+            -e CHANGELOG_DEST_PATH=/changelogs \
+            -e SERVICE_NAME=smoke-test \
+            -e SERVICE_IMAGE=smoke-test:latest \
+            -e SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/smoketest \
+            -e SPRING_DATASOURCE_USERNAME=smoketest \
+            -e SPRING_DATASOURCE_PASSWORD=smoketest \
+            "${{ steps.tags.outputs.primary }}"
+
+          ACTION=$(cat /tmp/smoke/dest/migration-action.txt)
+          echo "Smoke test action: ${ACTION}"
+          if [[ "${ACTION}" != "update" ]]; then
+            echo "ERROR: expected action=update for fresh database, got: ${ACTION}"
+            exit 1
+          fi
+
+      - name: Smoke test — no changelog files exits gracefully
+        run: |
+          EMPTY_SRC=$(mktemp -d)
+          EMPTY_DEST=$(mktemp -d)
+
+          docker run --rm \
+            --network host \
+            -v "${EMPTY_SRC}":/db/changelog:ro \
+            -v "${EMPTY_DEST}":/changelogs \
+            -e CHANGELOG_SOURCE_PATH=/db/changelog \
+            -e CHANGELOG_DEST_PATH=/changelogs \
+            -e SERVICE_NAME=smoke-test-no-changelogs \
+            -e SERVICE_IMAGE=smoke-test:latest \
+            -e SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/smoketest \
+            -e SPRING_DATASOURCE_USERNAME=smoketest \
+            -e SPRING_DATASOURCE_PASSWORD=smoketest \
+            "${{ steps.tags.outputs.primary }}"
+
+          if [[ -f "${EMPTY_DEST}/migration-action.txt" ]]; then
+            echo "ERROR: migration-action.txt must not be written when no changelog files exist"
+            exit 1
+          fi
+          echo "Smoke test passed: graceful exit with no changelog files"
+

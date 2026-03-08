@@ -77,9 +77,11 @@ func execute(getenv func(string) string, queryDB func(context.Context, string) (
 	// ── Phase 2: count changelog changesets and query DB state ────────────────
 	// Region detection is Phase 4 — not checked here.
 
-	// Count the total changesets present in the changelog files that were just
-	// copied into dest. This is the "desired" state.
-	changelogCount, err := changelog.CountChangeSets(dest)
+	// Count the total changesets present in the service image's changelog
+	// directory (the "desired" state). Counting from src — the original service
+	// image directory — expresses intent clearly: this is what the service
+	// intends to apply, independent of anything already written to dest.
+	changelogCount, err := changelog.CountChangeSets(src)
 	if err != nil {
 		return fmt.Errorf("failed to count changesets in changelog: %w", err)
 	}

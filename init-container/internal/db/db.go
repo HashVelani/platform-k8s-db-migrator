@@ -7,8 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/lib/pq"
-	_ "github.com/lib/pq" // register the postgres driver with database/sql
+	"github.com/lib/pq" // also registers the "postgres" driver with database/sql
 )
 
 // ParseDSN converts a JDBC PostgreSQL URL to a Go connection string understood
@@ -24,6 +23,10 @@ import (
 //
 // The supplied username and password are embedded in the returned URL.
 func ParseDSN(jdbcURL, username, password string) (string, error) {
+	if jdbcURL == "" {
+		return "", fmt.Errorf("DB URL must not be empty")
+	}
+
 	// Strip the "jdbc:" scheme prefix that Java drivers require.
 	raw := strings.TrimPrefix(jdbcURL, "jdbc:")
 

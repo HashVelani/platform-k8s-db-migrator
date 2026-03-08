@@ -46,7 +46,7 @@ kubectl logs job/<job-name> -c liquibase -n <namespace>
 | Error | Root cause | Fix |
 |---|---|---|
 | `Connection refused` | DB not reachable from the Job pod | Check DB_URL, network policies, security groups |
-| `liquibase.exception.LockException` | Stale lock in DATABASECHANGELOCKLOG | See "Clear a stale lock" below |
+| `liquibase.exception.LockException` | Stale lock in DATABASECHANGELOGLOCK | See "Clear a stale lock" below |
 | `Validation failed` | Changelog checksum mismatch | A committed changeset was modified — restore original or clear checksums |
 | `ChangeSet already ran` | Duplicate changeset ID | Fix duplicate IDs in changelog files |
 

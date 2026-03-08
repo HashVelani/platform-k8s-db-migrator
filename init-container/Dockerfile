@@ -6,7 +6,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /init-container ./cmd/main.go
 
-# Stage 2: scratch image — binary only, nothing else
+# Stage 2: scratch image — binary only, plus CA certificates for TLS
 FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /init-container /init-container
 ENTRYPOINT ["/init-container"]

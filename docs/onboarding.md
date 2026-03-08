@@ -108,13 +108,15 @@ spec:
               mountPath: /changelogs
       containers:
         - name: liquibase
-          image: liquibase/liquibase:latest
+          # Pin to a specific immutable version to avoid supply-chain risk — do not
+          # use 'latest'. Find stable releases at https://hub.docker.com/r/liquibase/liquibase/tags
+          image: liquibase/liquibase:<version>
           args:
             - --changeLogFile=/changelogs/changelog-master.xml
             - --url=$(SPRING_DATASOURCE_URL)
             - --username=$(SPRING_DATASOURCE_USERNAME)
             - --password=$(SPRING_DATASOURCE_PASSWORD)
-            - update
+            - update # NOTE: currently always runs 'update'; reading migration-action.txt (Phase 3 rollback) is not yet implemented here
           envFrom:
             - configMapRef:
                 name: <service-name>-config

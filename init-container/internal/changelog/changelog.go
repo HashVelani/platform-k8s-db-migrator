@@ -1,7 +1,9 @@
 package changelog
 
 import (
+	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,10 @@ import (
 
 // CountChangeSets returns the total number of <changeSet elements found
 // across all XML files in dir, searched recursively.
+//
+// Uses an XML tokenizer (not a plain text search) so that changeSet references
+// inside XML comments or CDATA sections are not counted, and namespace-prefixed
+// tags (e.g. <lb:changeSet>) are handled correctly via Name.Local.
 //
 // This is compared against the count of applied changesets in
 // DATABASECHANGELOG to determine whether a migration is required:
@@ -25,12 +31,40 @@ func CountChangeSets(dir string) (int, error) {
 		if info.IsDir() || !strings.HasSuffix(strings.ToLower(info.Name()), ".xml") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		n, err := countChangeSetsInFile(path)
 		if err != nil {
-			return fmt.Errorf("cannot read changelog %q: %w", path, err)
+			return err
 		}
-		total += strings.Count(string(data), "<changeSet")
+		total += n
 		return nil
 	})
 	return total, err
+}
+
+// countChangeSetsInFile opens a single XML file, tokenizes it, and returns
+// the number of <changeSet start elements it contains. Extracting this into
+// its own function ensures the file handle is closed as soon as the function
+// returns — the defer does not accumulate across multiple Walk iterations.
+func countChangeSetsInFile(path string) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("cannot read changelog %q: %w", path, err)
+	}
+	defer f.Close()
+
+	var count int
+	decoder := xml.NewDecoder(f)
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, fmt.Errorf("cannot parse changelog %q: %w", path, err)
+		}
+		if se, ok := tok.(xml.StartElement); ok && se.Name.Local == "changeSet" {
+			count++
+		}
+	}
+	return count, nil
 }

@@ -42,17 +42,16 @@ Environment variables required in Phase 1:
 | `CHANGELOG_DEST_PATH`  | Job spec (hardcoded)  | `/changelogs`             |
 | `SERVICE_NAME`         | Job spec              | Name of the service       |
 | `SERVICE_IMAGE`        | Job spec              | Full image ref            |
-| `REGION_ROLE`          | Kustomize overlay     | `primary` or `replica`    |
-| `REGION`               | Kustomize overlay     | e.g. `eu-west-1`          |
 
-### Phase 2 — Region-aware migration direction (stubbed — TODOs in code)
+### Phase 2 — DB schema inspection and migration decision (implemented)
 
-Phase 2 will add:
-- Region detection (EUW1 primary vs EUW2 replica)
-- DB state check via `DATABASECHANGELOG` table
-- Forward/rollback decision written to `/changelogs/migration-action.txt`
+Phase 2 connects to PostgreSQL, counts applied changesets in `DATABASECHANGELOG`,
+and writes the migration action (`update` or `none`) to `/changelogs/migration-action.txt`.
 
-Additional variables for Phase 2: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`.
+Additional variables for Phase 2: `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`.
+
+These use the same env var names as Spring Boot + Hikari so the init container can share
+the service's existing ConfigMap/Secret via `envFrom` with zero remapping.
 
 ---
 

@@ -51,9 +51,6 @@ VARCHAR_SHRINK_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-LIQUIBASE_NS = "http://www.liquibase.org/xml/ns/dbchangelog"
-
-
 def local(tag: str) -> str:
     """Strip XML namespace prefix."""
     if tag.startswith("{"):

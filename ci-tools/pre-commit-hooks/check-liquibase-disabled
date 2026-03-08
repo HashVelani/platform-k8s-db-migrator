@@ -30,7 +30,7 @@ for ext in "${FILE_EXTENSIONS[@]}"; do
                 violations+=("$file: matches forbidden pattern '$pattern'")
             fi
         done
-    done < <(git diff --cached --name-only --diff-filter=ACM | grep -E "${ext//\*/.*}" || true)
+    done < <(git diff --cached --name-only --diff-filter=ACM -- "$ext" || true)
 done
 
 if [[ ${#violations[@]} -gt 0 ]]; then

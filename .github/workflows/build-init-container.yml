@@ -53,11 +53,14 @@ jobs:
           go tool cover -func=coverage.out | awk '
             NR > 1 {
               gsub(/github\.com\/your-org\/platform-k8s-db-migrator\/init-container\//, "", $1)
-              pct = $NF
-              if (pct == "100.0%")      icon = "🟢"
-              else if (pct >= "80.0%")  icon = "🟡"
-              else                      icon = "🔴"
-              printf "| `%s` | %s %s |\n", $1, icon, pct
+              pct_str = $NF
+              pct = pct_str
+              gsub(/%$/, "", pct)
+              cov = pct + 0
+              if (cov >= 100.0)     icon = "🟢"
+              else if (cov >= 80.0) icon = "🟡"
+              else                  icon = "🔴"
+              printf "| `%s` | %s %s |\n", $1, icon, pct_str
             }
           ' >> "$GITHUB_STEP_SUMMARY"
 
@@ -185,16 +188,16 @@ jobs:
       - name: Prepare smoke-test directories
         run: |
           mkdir -p /tmp/smoke/src /tmp/smoke/dest
-          cat > /tmp/smoke/src/changelog-master.xml <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog">
-            <changeSet id="1-smoke" author="ci">
-              <createTable tableName="smoke_test">
-                <column name="id" type="BIGINT"/>
-              </createTable>
-            </changeSet>
-          </databaseChangeLog>
-          EOF
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog">' \
+            '  <changeSet id="1-smoke" author="ci">' \
+            '    <createTable tableName="smoke_test">' \
+            '      <column name="id" type="BIGINT"/>' \
+            '    </createTable>' \
+            '  </changeSet>' \
+            '</databaseChangeLog>' \
+            > /tmp/smoke/src/changelog-master.xml
 
       - name: Smoke test — fresh database expects action=update
         run: |

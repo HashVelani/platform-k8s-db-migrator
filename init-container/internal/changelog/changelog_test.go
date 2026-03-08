@@ -214,3 +214,43 @@ func TestCountChangeSets_UnreadableFile(t *testing.T) {
 	}
 }
 
+// TestCountChangeSets_MalformedXML verifies that an XML file containing
+// invalid markup returns an error (not a silent zero count). This covers the
+// encoding/xml tokenizer error path introduced to replace the string-search
+// approach.
+func TestCountChangeSets_MalformedXML(t *testing.T) {
+	dir := t.TempDir()
+	// Unclosed tag — the XML decoder will fail on this.
+	writeFile(t, filepath.Join(dir, "bad.xml"), `<databaseChangeLog><changeSet id="1" author="dev">`)
+
+	_, err := CountChangeSets(dir)
+	if err == nil {
+		t.Fatal("expected error for malformed XML, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot parse changelog") {
+		t.Errorf("error should mention parse failure, got: %v", err)
+	}
+}
+
+// TestCountChangeSets_ChangeSetInComment verifies that a <changeSet string
+// inside an XML comment is NOT counted — this was impossible to guarantee
+// with the old string-search approach but the XML tokenizer handles it
+// correctly because comments are returned as xml.Comment tokens, not
+// xml.StartElement tokens.
+func TestCountChangeSets_ChangeSetInComment(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "v1.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog>
+  <!-- <changeSet id="disabled" author="dev"/> this should not be counted -->
+  <changeSet id="1" author="dev"><createTable tableName="a"/></changeSet>
+</databaseChangeLog>`)
+
+	count, err := CountChangeSets(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 (comment <changeSet must not be counted), got %d", count)
+	}
+}
+

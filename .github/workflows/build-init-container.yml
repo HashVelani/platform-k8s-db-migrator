@@ -8,15 +8,13 @@ on:
       - "v*"
 
 env:
-  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-  ECR_REPOSITORY: platform-k8s-db-migrator/init-container
+  DOCKERHUB_REPOSITORY: hashvelani/platform-k8s-db-migrator
 
 jobs:
   build-and-push:
     name: Build and push init-container image
     runs-on: ubuntu-latest
     permissions:
-      id-token: write   # required for OIDC authentication to AWS
       contents: read
 
     steps:
@@ -33,29 +31,25 @@ jobs:
         working-directory: init-container
         run: go test ./...
 
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: eu-west-1
-
-      - name: Login to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Determine image tags
         id: tags
         run: |
-          SHA_TAG="${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ github.sha }}"
+          SHA_TAG="${DOCKERHUB_REPOSITORY}:${{ github.sha }}"
           TAGS="$SHA_TAG"
 
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            TAGS="$TAGS,${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+            TAGS="$TAGS,${DOCKERHUB_REPOSITORY}:latest"
           fi
 
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             SEMVER="${GITHUB_REF_NAME}"
-            TAGS="$TAGS,${ECR_REGISTRY}/${ECR_REPOSITORY}:${SEMVER}"
+            TAGS="$TAGS,${DOCKERHUB_REPOSITORY}:${SEMVER}"
           fi
 
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"

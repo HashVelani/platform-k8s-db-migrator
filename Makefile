@@ -16,10 +16,10 @@ lint:
 docker-build:
 	docker build -t platform-k8s-db-migrator/init-container:dev init-container/
 
-## docker-push: push the init-container image to ECR (requires AWS auth)
+## docker-push: push the init-container image to Docker Hub (requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN env vars)
 docker-push:
-	@echo "Ensure AWS credentials are configured and ECR_REGISTRY is set."
-	docker push $(ECR_REGISTRY)/platform-k8s-db-migrator/init-container:dev
+	@echo "Ensure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are set and you are logged in (docker login)."
+	docker push hashvelani/platform-k8s-db-migrator:dev
 
 ## help: list all targets with descriptions
 help:

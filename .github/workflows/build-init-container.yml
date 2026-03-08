@@ -94,9 +94,51 @@ jobs:
           go-version-file: init-container/go.mod
           cache-dependency-path: init-container/go.sum
 
-      - name: Run integration tests
+      - name: Run integration tests with coverage
         working-directory: init-container
-        run: go test -v -race -count=1 -tags=integration ./...
+        run: |
+          go test -v -race -count=1 -tags=integration \
+            -coverprofile=coverage-integration.out \
+            -covermode=atomic \
+            ./...
+
+      - name: Print per-function integration coverage to log
+        working-directory: init-container
+        run: go tool cover -func=coverage-integration.out
+
+      - name: Write integration coverage summary to job summary
+        working-directory: init-container
+        run: |
+          echo "## 📊 Integration Test Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Package / Function | Coverage |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage-integration.out | awk '
+            NR > 1 {
+              gsub(/github\.com\/your-org\/platform-k8s-db-migrator\/init-container\//, "", $1)
+              pct_str = $NF
+              pct = pct_str
+              gsub(/%$/, "", pct)
+              cov = pct + 0
+              if (cov >= 100.0)     icon = "🟢"
+              else if (cov >= 80.0) icon = "🟡"
+              else                  icon = "🔴"
+              printf "| `%s` | %s %s |\n", $1, icon, pct_str
+            }
+          ' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate HTML integration coverage report
+        working-directory: init-container
+        run: go tool cover -html=coverage-integration.out -o coverage-integration.html
+
+      - name: Upload integration coverage report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration-report
+          path: |
+            init-container/coverage-integration.out
+            init-container/coverage-integration.html
+          retention-days: 30
 
   # ── 3. Build, push, smoke-test — main branch and semver tags only ───────────
   #
@@ -130,11 +172,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Install buildah
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y buildah
+
+      - name: Log in to Docker Hub
+        env:
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          printf '%s' "${DOCKER_PASSWORD}" | buildah login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin docker.io
 
       - name: Determine image tags
         id: tags
@@ -165,13 +212,18 @@ jobs:
           echo "primary=${SHA_TAG}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: init-container
-          file: init-container/Dockerfile
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
+      - name: Build Docker image
+        run: |
+          buildah bud -t platform-k8s-db-migrator:latest -f init-container/Dockerfile init-container
+
+      - name: Tag and push Docker image
+        run: |
+          set -e
+          IFS=',' read -ra TAG_LIST <<< "${{ steps.tags.outputs.tags }}"
+          for tag in "${TAG_LIST[@]}"; do
+            buildah tag platform-k8s-db-migrator:latest "${tag}"
+            buildah push "${tag}" "docker://${tag}"
+          done
 
       - name: Annotate build summary with image tags
         run: |
@@ -244,4 +296,13 @@ jobs:
             exit 1
           fi
           echo "Smoke test passed: graceful exit with no changelog files"
+
+      - name: Prune images
+        if: always()
+        run: |
+          if command -v podman >/dev/null 2>&1; then
+            podman image prune -f
+          else
+            echo "podman not installed; skipping image prune"
+          fi
 

@@ -13,6 +13,8 @@ func env(m map[string]string) func(string) string {
 }
 
 // validEnv returns a minimal set of env vars that point at real temp dirs.
+// Only Phase 1 vars are included — REGION_ROLE and REGION are Phase 2 and
+// must not be required by Phase 1.
 func validEnv(t *testing.T) (map[string]string, string) {
 	t.Helper()
 	src := t.TempDir()
@@ -28,8 +30,6 @@ func validEnv(t *testing.T) (map[string]string, string) {
 		"CHANGELOG_DEST_PATH":   dest,
 		"SERVICE_NAME":          "test-service",
 		"SERVICE_IMAGE":         "test-image:latest",
-		"REGION_ROLE":           "primary",
-		"REGION":                "eu-west-1",
 	}, dest
 }
 
@@ -47,6 +47,21 @@ func TestRun_Success(t *testing.T) {
 	}
 	if string(data) != "<root/>" {
 		t.Errorf("unexpected file content: %q", string(data))
+	}
+}
+
+// TestRun_Phase1DoesNotRequireRegionVars asserts that Phase 1 completes
+// successfully when REGION_ROLE and REGION are absent. Region detection
+// is a Phase 2 concern and must not block Phase 1.
+func TestRun_Phase1DoesNotRequireRegionVars(t *testing.T) {
+	m, _ := validEnv(t)
+
+	// Explicitly confirm neither region var is present.
+	delete(m, "REGION_ROLE")
+	delete(m, "REGION")
+
+	if err := run(env(m)); err != nil {
+		t.Fatalf("Phase 1 must not require REGION_ROLE or REGION, got error: %v", err)
 	}
 }
 

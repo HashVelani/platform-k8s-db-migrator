@@ -84,7 +84,7 @@ spec:
       restartPolicy: Never
       initContainers:
         - name: init-changelogs
-          image: <ECR_REGISTRY>/platform-k8s-db-migrator/init-container:<version>
+          image: hashvelani/platform-k8s-db-migrator:<version>
           env:
             - name: CHANGELOG_SOURCE_PATH
               value: /db/changelog

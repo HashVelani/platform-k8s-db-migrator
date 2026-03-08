@@ -130,11 +130,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        env:
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          printf '%s' "${DOCKER_PASSWORD}" | buildah login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin docker.io
 
       - name: Determine image tags
         id: tags
@@ -165,13 +165,18 @@ jobs:
           echo "primary=${SHA_TAG}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: init-container
-          file: init-container/Dockerfile
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
+      - name: Build Docker image
+        run: |
+          buildah bud -t platform-k8s-db-migrator:latest -f init-container/Dockerfile init-container
+
+      - name: Tag and push Docker image
+        run: |
+          set -e
+          IFS=',' read -ra TAG_LIST <<< "${{ steps.tags.outputs.tags }}"
+          for tag in "${TAG_LIST[@]}"; do
+            buildah tag platform-k8s-db-migrator:latest "${tag}"
+            buildah push "${tag}"
+          done
 
       - name: Annotate build summary with image tags
         run: |
@@ -244,4 +249,8 @@ jobs:
             exit 1
           fi
           echo "Smoke test passed: graceful exit with no changelog files"
+
+      - name: Prune images
+        if: always()
+        run: podman image prune -f
 

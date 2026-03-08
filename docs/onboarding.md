@@ -94,21 +94,15 @@ spec:
               value: <service-name>
             - name: SERVICE_IMAGE
               value: <your-registry>/<service-name>:<image-tag>
-            - name: DB_URL
-              valueFrom:
-                secretKeyRef:
-                  name: <service-name>-db-secret
-                  key: url
-            - name: DB_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: <service-name>-db-secret
-                  key: username
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: <service-name>-db-secret
-                  key: password
+          # DB credentials come from the same ConfigMap and Secret your service
+          # already uses. envFrom mounts all keys as env vars automatically, so
+          # SPRING_DATASOURCE_URL, SPRING_DATASOURCE_USERNAME and
+          # SPRING_DATASOURCE_PASSWORD are available without any extra mapping.
+          envFrom:
+            - configMapRef:
+                name: <service-name>-config   # provides SPRING_DATASOURCE_URL, SPRING_DATASOURCE_USERNAME
+            - secretRef:
+                name: <service-name>-db-secret # provides SPRING_DATASOURCE_PASSWORD
           volumeMounts:
             - name: changelogs
               mountPath: /changelogs
@@ -117,26 +111,15 @@ spec:
           image: liquibase/liquibase:latest
           args:
             - --changeLogFile=/changelogs/changelog-master.xml
-            - --url=$(DB_URL)
-            - --username=$(DB_USERNAME)
-            - --password=$(DB_PASSWORD)
+            - --url=$(SPRING_DATASOURCE_URL)
+            - --username=$(SPRING_DATASOURCE_USERNAME)
+            - --password=$(SPRING_DATASOURCE_PASSWORD)
             - update
-          env:
-            - name: DB_URL
-              valueFrom:
-                secretKeyRef:
-                  name: <service-name>-db-secret
-                  key: url
-            - name: DB_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: <service-name>-db-secret
-                  key: username
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: <service-name>-db-secret
-                  key: password
+          envFrom:
+            - configMapRef:
+                name: <service-name>-config
+            - secretRef:
+                name: <service-name>-db-secret
           volumeMounts:
             - name: changelogs
               mountPath: /changelogs

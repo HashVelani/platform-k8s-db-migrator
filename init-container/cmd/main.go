@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/your-org/platform-k8s-db-migrator/init-container/internal/changelog"
 	"github.com/your-org/platform-k8s-db-migrator/init-container/internal/copy"
 	"github.com/your-org/platform-k8s-db-migrator/init-container/internal/db"
 	"github.com/your-org/platform-k8s-db-migrator/init-container/internal/decision"
@@ -26,12 +27,15 @@ func main() {
 // run is the production entry point. It wires the real database querier into
 // execute so that main() stays a three-line wrapper.
 func run(getenv func(string) string) error {
-	return execute(getenv, db.GetLatestChangeset)
+	return execute(getenv, db.GetAppliedChangesetCount)
 }
 
 // execute is the testable core. queryDB is injected so tests can supply a
 // controlled implementation without requiring a live PostgreSQL instance.
-func execute(getenv func(string) string, queryDB func(context.Context, string) (string, error)) error {
+//
+// queryDB must return the number of changesets already applied in
+// DATABASECHANGELOG (0 for a fresh database).
+func execute(getenv func(string) string, queryDB func(context.Context, string) (int, error)) error {
 	slog.Info("platform-k8s-db-migrator init container starting")
 
 	// ── Phase 1: copy changelogs from service image into shared emptyDir ──────
@@ -70,18 +74,42 @@ func execute(getenv func(string) string, queryDB func(context.Context, string) (
 		"dest", dest,
 	)
 
-	// ── Phase 2: query DB state and decide migration action ───────────────────
+	// ── Phase 2: count changelog changesets and query DB state ────────────────
 	// Region detection is Phase 4 — not checked here.
 
-	dbURL, err := mustGetenv(getenv, "DB_URL")
+	// Count the total changesets present in the changelog files that were just
+	// copied into dest. This is the "desired" state.
+	changelogCount, err := changelog.CountChangeSets(dest)
+	if err != nil {
+		return fmt.Errorf("failed to count changesets in changelog: %w", err)
+	}
+
+	if changelogCount == 0 {
+		slog.Warn("no Liquibase changelog files found — skipping database check",
+			"service", serviceName,
+			"src", src,
+			"hint", "if this service uses a database, add changelog XML files to the service image at CHANGELOG_SOURCE_PATH",
+		)
+		return nil
+	}
+
+	slog.Info("changelog changesets counted",
+		"service", serviceName,
+		"changelogCount", changelogCount,
+	)
+
+	// Read DB credentials from environment. In Kubernetes these come from the
+	// same ConfigMap (and Secret) that the service itself uses with Hikari,
+	// so the init container can reference them via envFrom without any remapping.
+	dbURL, err := mustGetenv(getenv, "SPRING_DATASOURCE_URL")
 	if err != nil {
 		return err
 	}
-	dbUsername, err := mustGetenv(getenv, "DB_USERNAME")
+	dbUsername, err := mustGetenv(getenv, "SPRING_DATASOURCE_USERNAME")
 	if err != nil {
 		return err
 	}
-	dbPassword, err := mustGetenv(getenv, "DB_PASSWORD")
+	dbPassword, err := mustGetenv(getenv, "SPRING_DATASOURCE_PASSWORD")
 	if err != nil {
 		return err
 	}
@@ -94,17 +122,17 @@ func execute(getenv func(string) string, queryDB func(context.Context, string) (
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	latestChangeset, err := queryDB(ctx, dsn)
+	dbCount, err := queryDB(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("failed to query database: %w", err)
 	}
 
-	slog.Info("database state retrieved",
+	slog.Info("database changesets counted",
 		"service", serviceName,
-		"latestChangeset", latestChangeset,
+		"dbCount", dbCount,
 	)
 
-	action, err := decision.Decide(latestChangeset)
+	action, err := decision.Decide(dbCount, changelogCount)
 	if err != nil {
 		return fmt.Errorf("failed to determine migration action: %w", err)
 	}
@@ -117,20 +145,22 @@ func execute(getenv func(string) string, queryDB func(context.Context, string) (
 
 	switch action {
 	case decision.ActionUpdate:
-		slog.Info("migration action: update — database is behind the changelog",
+		slog.Info("migration action: update — new changesets to apply",
 			"service", serviceName,
-			"action", action,
+			"dbCount", dbCount,
+			"changelogCount", changelogCount,
 		)
 	case decision.ActionNone:
 		slog.Info("migration action: none — database is already up to date",
 			"service", serviceName,
-			"action", action,
+			"dbCount", dbCount,
+			"changelogCount", changelogCount,
 		)
 	}
 
 	// ── Phase 3 stub ──────────────────────────────────────────────────────────
 	// TODO Phase 3: implement rollback detection
-	// Compare latestChangeset against the changelog files to detect when the
+	// Compare applied changesets against the changelog to detect when the
 	// deployed changelog is behind the DB (rollback scenario). Write "rollback"
 	// to migration-action.txt so the Liquibase runner can apply rollback scripts.
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/lib/pq"
-	_ "github.com/lib/pq" // PostgreSQL driver
+	_ "github.com/lib/pq" // register the postgres driver with database/sql
 )
 
 // ParseDSN converts a JDBC PostgreSQL URL to a Go connection string understood
@@ -40,41 +40,31 @@ func ParseDSN(jdbcURL, username, password string) (string, error) {
 	return u.String(), nil
 }
 
-// GetLatestChangeset connects to PostgreSQL using dsn and queries
-// DATABASECHANGELOG for the most recently applied changeset ID.
+// GetAppliedChangesetCount connects to PostgreSQL using dsn and returns the
+// number of changesets recorded in DATABASECHANGELOG.
 //
-// Returns ("", nil) when the database is fresh — i.e. the DATABASECHANGELOG
-// table has not been created yet (Liquibase has never run against it).
-func GetLatestChangeset(ctx context.Context, dsn string) (string, error) {
+// Returns 0 when the database is fresh — i.e. the DATABASECHANGELOG table has
+// not been created yet (Liquibase has never run against this database).
+func GetAppliedChangesetCount(ctx context.Context, dsn string) (int, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		return "", fmt.Errorf("cannot open database connection: %w", err)
+		return 0, fmt.Errorf("cannot open database connection: %w", err)
 	}
 	defer db.Close()
 
 	if err := db.PingContext(ctx); err != nil {
-		return "", fmt.Errorf("cannot reach database: %w", err)
+		return 0, fmt.Errorf("cannot reach database: %w", err)
 	}
 
-	const query = `
-		SELECT id
-		FROM databasechangelog
-		ORDER BY dateexecuted DESC, orderexecuted DESC
-		LIMIT 1`
-
-	var id string
-	err = db.QueryRowContext(ctx, query).Scan(&id)
-	switch {
-	case err == sql.ErrNoRows:
-		// Table exists but Liquibase has never applied a changeset.
-		return "", nil
-	case err != nil:
+	var count int
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM databasechangelog`).Scan(&count)
+	if err != nil {
 		// 42P01 = undefined_table: DATABASECHANGELOG not yet created (fresh DB).
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "42P01" {
-			return "", nil
+			return 0, nil
 		}
-		return "", fmt.Errorf("cannot query DATABASECHANGELOG: %w", err)
+		return 0, fmt.Errorf("cannot query DATABASECHANGELOG: %w", err)
 	}
 
-	return id, nil
+	return count, nil
 }

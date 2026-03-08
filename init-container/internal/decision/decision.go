@@ -1,5 +1,7 @@
 package decision
 
+import "fmt"
+
 // Action represents the migration action the Liquibase runner should take.
 type Action string
 
@@ -10,20 +12,30 @@ const (
 	ActionBlock    Action = "block"    // Region mismatch — block deployment (Phase 4)
 )
 
-// Decide returns the migration Action based on the current database state.
+// Decide returns the migration Action by comparing the number of changesets
+// already applied in DATABASECHANGELOG (dbCount) against the total number of
+// changesets present in the copied changelog files (changelogCount).
 //
-// latestDB is the most recent changeset ID recorded in DATABASECHANGELOG, or
-// empty string when the database is fresh (table not yet created by Liquibase).
-//
-// Current logic:
-//   - Empty latestDB  → ActionUpdate  (fresh database, run all changesets)
-//   - Non-empty latestDB → ActionNone (already migrated; rollback detection is Phase 3)
+//   - changelogCount > dbCount  → ActionUpdate  (new changesets to apply)
+//   - changelogCount == dbCount → ActionNone    (database is up to date)
+//   - changelogCount < dbCount  → error         (changeset removed; manual fix needed)
 //
 // Rollback detection will be added in Phase 3.
 // Region-based block logic will be added in Phase 4.
-func Decide(latestDB string) (Action, error) {
-	if latestDB == "" {
+func Decide(dbCount, changelogCount int) (Action, error) {
+	switch {
+	case changelogCount > dbCount:
 		return ActionUpdate, nil
+	case changelogCount == dbCount:
+		return ActionNone, nil
+	default:
+		// changelogCount < dbCount: a changeset that was previously applied no
+		// longer exists in the changelog files. This should never happen in normal
+		// operation — it means someone deleted a changeset. Fail loudly.
+		return "", fmt.Errorf(
+			"database has %d applied changesets but changelog only contains %d — "+
+				"a changeset was removed from the changelog files; manual intervention required",
+			dbCount, changelogCount,
+		)
 	}
-	return ActionNone, nil
 }

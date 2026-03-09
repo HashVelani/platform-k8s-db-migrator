@@ -111,12 +111,48 @@ spec:
           # Pin to a specific immutable version to avoid supply-chain risk — do not
           # use 'latest'. Find stable releases at https://hub.docker.com/r/liquibase/liquibase/tags
           image: liquibase/liquibase:<version>
+          # The shell wrapper reads migration-action.txt written by the init container.
+          # If the file is absent (no changelogs in the service image) or the action
+          # is 'none' (DB already up to date), Liquibase is skipped and the container
+          # exits 0 so the Job completes successfully without any error.
+          command: ["/bin/sh", "-c"]
           args:
-            - --changeLogFile=/changelogs/changelog-master.xml
-            - --url=$(SPRING_DATASOURCE_URL)
-            - --username=$(SPRING_DATASOURCE_USERNAME)
-            - --password=$(SPRING_DATASOURCE_PASSWORD)
-            - update # NOTE: currently always runs 'update'; reading migration-action.txt (Phase 3 rollback) is not yet implemented here
+            - |
+              set -e
+              ACTION_FILE=/changelogs/migration-action.txt
+              if [ ! -f "$ACTION_FILE" ]; then
+                echo "No migration-action.txt found — no changelogs to process, skipping Liquibase"
+                exit 0
+              fi
+              ACTION=$(cat "$ACTION_FILE")
+              case "$ACTION" in
+                none)
+                  echo "Migration action is 'none' — database already up to date, skipping Liquibase"
+                  exit 0
+                  ;;
+                update)
+                  LIQUIBASE_CMD="update"
+                  ;;
+                rollback)
+                  echo "Migration action is 'rollback' — running Liquibase rollback"
+                  LIQUIBASE_CMD="rollback"
+                  ;;
+                block)
+                  echo "Migration action is 'block' — failing Job to block deployment"
+                  exit 1
+                  ;;
+                *)
+                  echo "Unknown migration action '$ACTION' — failing Job to avoid masking migration problems"
+                  exit 1
+                  ;;
+              esac
+              exec /liquibase/liquibase \
+                --searchPath=/changelogs \
+                --changeLogFile=changelog-master.xml \
+                --url="$SPRING_DATASOURCE_URL" \
+                --username="$SPRING_DATASOURCE_USERNAME" \
+                --password="$SPRING_DATASOURCE_PASSWORD" \
+                "$LIQUIBASE_CMD"
           envFrom:
             - configMapRef:
                 name: <service-name>-config

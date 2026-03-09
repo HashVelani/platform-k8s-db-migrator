@@ -13,10 +13,11 @@ import (
 // The service image has changelogs baked in at /db/changelog/ as loose files.
 // Dest is an emptyDir volume shared with the liquibase runner main container.
 //
-// The second return value reports whether any copying was performed.
-// (false, nil) means the source path did not exist — the caller should exit 0
-// gracefully without querying the database.
-func CopyChangelogs(src, dest string) (bool, error) {
+// The second return value (srcExists) reports whether the source path was
+// present on the filesystem. (false, nil) means the path does not exist in
+// the service image — the caller should exit 0 gracefully without querying
+// the database. This is distinct from a copy failure, which returns an error.
+func CopyChangelogs(src, dest string) (srcExists bool, err error) {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -17,12 +17,12 @@ func TestCopyChangelogs_Success(t *testing.T) {
 	writeFile(t, filepath.Join(src, "changelog-master.xml"), "<root/>")
 	writeFile(t, filepath.Join(src, "subdir", "v1.xml"), "<change/>")
 
-	copied, err := CopyChangelogs(src, dest)
+	srcExists, err := CopyChangelogs(src, dest)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !copied {
-		t.Fatal("expected copied=true for existing src, got false")
+	if !srcExists {
+		t.Fatal("expected srcExists=true for existing src, got false")
 	}
 
 	assertFileContent(t, filepath.Join(dest, "changelog-master.xml"), "<root/>")
@@ -33,12 +33,12 @@ func TestCopyChangelogs_MissingSrc(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "does-not-exist")
 	dest := t.TempDir()
 
-	copied, err := CopyChangelogs(src, dest)
+	srcExists, err := CopyChangelogs(src, dest)
 	if err != nil {
 		t.Fatalf("expected no error for missing src (graceful exit), got: %v", err)
 	}
-	if copied {
-		t.Fatal("expected copied=false when src does not exist, got true")
+	if srcExists {
+		t.Fatal("expected srcExists=false when src does not exist, got true")
 	}
 }
 

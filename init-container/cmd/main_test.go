@@ -234,12 +234,16 @@ func TestExecute_MissingSpringDatasourcePassword(t *testing.T) {
 // ── Other failure modes ───────────────────────────────────────────────────────
 
 func TestExecute_SrcDoesNotExist(t *testing.T) {
-	m, _ := validEnv(t)
+	m, dest := validEnv(t)
 	m["CHANGELOG_SOURCE_PATH"] = filepath.Join(t.TempDir(), "nonexistent")
 
-	err := execute(env(m), freshDB)
-	if err == nil {
-		t.Fatal("expected error when src does not exist, got nil")
+	if err := execute(env(m), freshDB); err != nil {
+		t.Fatalf("expected graceful exit when src does not exist, got: %v", err)
+	}
+
+	// migration-action.txt must NOT be written when source path is missing.
+	if _, err := os.Stat(filepath.Join(dest, "migration-action.txt")); !os.IsNotExist(err) {
+		t.Error("migration-action.txt must not be written when source path does not exist")
 	}
 }
 

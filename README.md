@@ -88,7 +88,6 @@ Requirements: Go 1.22+, Docker (for image build).
 ## Docs
 
 - [GitOps deployment contract](docs/gitops-deployment-contract.md) — what your GitOps manifests must provide
-- [Reference-service gap analysis](docs/reference-service-migration-gaps.md) — worked example auditing an existing service against the contract
 - [Onboarding guide](docs/onboarding.md)
 - [Runbook: migration failed](docs/runbook-migration-failed.md)
 - [Runbook: rollback](docs/runbook-rollback.md)

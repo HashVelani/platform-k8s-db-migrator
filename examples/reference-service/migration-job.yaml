@@ -1,0 +1,84 @@
+# ArgoCD PreSync hook Job — runs before every deployment of reference-service.
+#
+# Execution order:
+#   1. init-changelogs (init container)
+#      - Copies /db/changelog/ from the service image into the shared emptyDir.
+#      - Connects to PostgreSQL as the admin user and counts applied changesets.
+#      - Writes "update" or "none" to /changelogs/migration-action.txt.
+#   2. liquibase (main container)
+#      - Reads changelog files from the shared emptyDir.
+#      - Runs `liquibase update` to apply any pending changesets.
+#
+# Prerequisites (must be applied before this Job runs):
+#   - kustomize-base referenced in kustomization.yaml (creates migration-trigger-sa)
+#   - reference-service-db-config ConfigMap with SPRING_DATASOURCE_URL and
+#     SPRING_DATASOURCE_USERNAME keys
+#   - reference-service-liquibase-secret with SPRING_DATASOURCE_PASSWORD key
+#     (see liquibase-secret.yaml in this directory)
+#
+# Updating the service image tag:
+#   When you bump the image in deployment.yaml, update SERVICE_IMAGE below to
+#   match. There is no automated enforcement — both must be changed together.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: reference-service-db-migration
+  namespace: projects
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: reference-service-db-migration
+    spec:
+      serviceAccountName: migration-trigger-sa
+      restartPolicy: Never
+      initContainers:
+        - name: init-changelogs
+          # Pin to an immutable semver tag — do not use 'latest'.
+          # Available tags: https://github.com/HashVelani/platform-k8s-db-migrator/releases
+          # REQUIRED: replace <version-tag> with an actual release tag before applying, e.g. v1.0.0
+          image: hashvelani/platform-k8s-db-migrator:<version-tag>
+          env:
+            - name: CHANGELOG_SOURCE_PATH
+              value: /db/changelog
+            - name: CHANGELOG_DEST_PATH
+              value: /changelogs
+            - name: SERVICE_NAME
+              value: reference-service
+            - name: SERVICE_IMAGE
+              value: hashvelani/reference-service-internal:v0.1.1
+          envFrom:
+            - configMapRef:
+                name: reference-service-db-config
+            - secretRef:
+                name: reference-service-liquibase-secret
+          volumeMounts:
+            - name: changelogs
+              mountPath: /changelogs
+      containers:
+        - name: liquibase
+          # Pin to an immutable semver tag — do not use 'latest'.
+          # Available tags: https://hub.docker.com/r/liquibase/liquibase/tags
+          # REQUIRED: replace <version-tag> with an actual release tag before applying, e.g. 4.29.2
+          image: liquibase/liquibase:<version-tag>
+          args:
+            - --changeLogFile=/changelogs/changelog-master.xml
+            - --url=$(SPRING_DATASOURCE_URL)
+            - --username=$(SPRING_DATASOURCE_USERNAME)
+            - --password=$(SPRING_DATASOURCE_PASSWORD)
+            - update
+          envFrom:
+            - configMapRef:
+                name: reference-service-db-config
+            - secretRef:
+                name: reference-service-liquibase-secret
+          volumeMounts:
+            - name: changelogs
+              mountPath: /changelogs
+      volumes:
+        - name: changelogs
+          emptyDir: {}

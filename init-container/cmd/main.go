@@ -69,8 +69,13 @@ func execute(getenv func(string) string, queryDB func(context.Context, string) (
 		return fmt.Errorf("failed to copy changelogs: %w", err)
 	}
 	if !srcExists {
-		// Source path did not exist in the service image; copy.go already
-		// logged an info message. Exit 0 — no changelogs means no migration.
+		// Source path did not exist in the service image. Write a minimal
+		// valid empty changelog so that Liquibase finds no changesets, logs
+		// "up to date", and exits 0 — allowing ArgoCD to proceed without
+		// errors.
+		if err := writeEmptyChangelog(dest); err != nil {
+			return fmt.Errorf("failed to write empty changelog: %w", err)
+		}
 		return nil
 	}
 
@@ -189,4 +194,26 @@ func mustGetenv(getenv func(string) string, key string) (string, error) {
 		return "", fmt.Errorf("required environment variable %q is not set", key)
 	}
 	return val, nil
+}
+
+// emptyChangelog is the minimal valid Liquibase changelog XML. It contains no
+// changesets, so Liquibase will log "up to date" and exit 0.
+const emptyChangelog = `<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"/>
+`
+
+// writeEmptyChangelog creates dest (if it does not already exist) and writes
+// a minimal Liquibase changelog to dest/db.changelog-master.xml. Liquibase
+// reads the file, finds no changesets, logs "up to date", and exits 0 —
+// allowing the Job and ArgoCD to proceed without errors.
+func writeEmptyChangelog(dest string) error {
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return fmt.Errorf("cannot create changelog destination directory %q: %w", dest, err)
+	}
+	target := filepath.Join(dest, "db.changelog-master.xml")
+	if err := os.WriteFile(target, []byte(emptyChangelog), 0o644); err != nil {
+		return fmt.Errorf("cannot write empty changelog to %q: %w", target, err)
+	}
+	slog.Info("wrote empty changelog (source path absent)", "path", target)
+	return nil
 }

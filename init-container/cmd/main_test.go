@@ -245,6 +245,9 @@ func TestExecute_SrcDoesNotExist(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dest, "migration-action.txt")); !os.IsNotExist(err) {
 		t.Error("migration-action.txt must not be written when source path does not exist")
 	}
+
+	// An empty changelog must be written so Liquibase can run and exit 0.
+	assertFileContent(t, filepath.Join(dest, "db.changelog-master.xml"), emptyChangelog)
 }
 
 func TestExecute_DBQueryFails(t *testing.T) {

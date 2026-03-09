@@ -39,8 +39,12 @@ const changelogMasterFilename = "db.changelog-master.xml"
 // emptyChangelog is a minimal valid Liquibase changelog with no changesets.
 // Liquibase reads it, finds no changesets, logs "up to date", and exits 0.
 const emptyChangelog = `<?xml version="1.0" encoding="UTF-8"?>
-<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"/>
-`
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+</databaseChangeLog>`
 
 // writeEmptyChangelog writes emptyChangelog to dest/changelogMasterFilename so
 // that the Liquibase container finds a valid (empty) changelog and exits 0

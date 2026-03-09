@@ -227,3 +227,9 @@ kubectl logs job/<service-name>-db-migration -c liquibase
 ```
 
 Logs from the init container are JSON-structured. Each log line includes `time`, `level`, and `msg` fields plus context keys such as `service`, `src`, `dest`, `changelogCount`, and `dbCount`.
+
+---
+
+## Worked example
+
+See [reference-service-migration-gaps.md](reference-service-migration-gaps.md) for a step-by-step audit of an existing service's GitOps layout against this contract, with exact YAML snippets for every gap.

@@ -186,13 +186,13 @@ func TestCopyChangelogs_BinaryContent(t *testing.T) {
 	}
 }
 
-// TestCopyChangelogs_SrcEqualsDest_WithMasterFile_PreservesFiles verifies that
-// when src and dest are the same directory and db.changelog-master.xml already
-// exists there, CopyChangelogs skips the walk and preserves the file content.
+// TestCopyChangelogs_SrcEqualsDest_PreservesFiles verifies that when src and
+// dest are the same directory, CopyChangelogs is a no-op regardless of what
+// files are present — no file is truncated and all content is preserved.
 // Without this guard, copyFile opens the destination with O_TRUNC before
 // reading — truncating the file to zero bytes because src and dest are the
 // same inode, then copying nothing from the now-empty "source".
-func TestCopyChangelogs_SrcEqualsDest_WithMasterFile_PreservesFiles(t *testing.T) {
+func TestCopyChangelogs_SrcEqualsDest_PreservesFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	masterContent := "<databaseChangeLog/>"
@@ -213,22 +213,19 @@ func TestCopyChangelogs_SrcEqualsDest_WithMasterFile_PreservesFiles(t *testing.T
 		t.Fatal("expected srcExists=true when src exists, got false")
 	}
 
-	// The master file must not have been truncated.
+	// All files must be preserved — no walk, no O_TRUNC truncation.
 	assertFileContent(t, filepath.Join(dir, "db.changelog-master.xml"), masterContent)
-	// Sub-directory file must also be preserved.
 	assertFileContent(t, filepath.Join(sub, "v1.xml"), changeContent)
 }
 
-// TestCopyChangelogs_SrcEqualsDest_NoMasterFile_ProceedsWithWalk verifies that
-// when src and dest are the same path but db.changelog-master.xml does not yet
-// exist, CopyChangelogs still performs the walk (no master file to skip for).
-// The self-copy truncates any existing files (O_TRUNC on the same inode), which
-// documents the known degenerate behaviour for this edge case — in practice the
-// shared volume would be empty when no master file exists.
-func TestCopyChangelogs_SrcEqualsDest_NoMasterFile_ProceedsWithWalk(t *testing.T) {
+// TestCopyChangelogs_SrcEqualsDest_NoMasterFile_IsNoOp verifies that the
+// self-copy guard applies unconditionally: even when db.changelog-master.xml
+// is absent, CopyChangelogs returns (true, nil) without walking, preserving
+// any other files that happen to be present.
+func TestCopyChangelogs_SrcEqualsDest_NoMasterFile_IsNoOp(t *testing.T) {
 	dir := t.TempDir()
 
-	// Seed a file without a master file so the early-return guard doesn't fire.
+	// Seed a file without a master changelog.
 	writeFile(t, filepath.Join(dir, "README.md"), "docs")
 
 	srcExists, err := CopyChangelogs(dir, dir)
@@ -239,11 +236,8 @@ func TestCopyChangelogs_SrcEqualsDest_NoMasterFile_ProceedsWithWalk(t *testing.T
 		t.Fatal("expected srcExists=true when src exists, got false")
 	}
 
-	// The walk ran and self-copied README.md — O_TRUNC on the same inode
-	// truncates it to zero bytes. This documents the known degenerate
-	// behaviour; it is acceptable because in practice no master file means
-	// the shared volume started empty and no real changelog data is at risk.
-	assertFileContent(t, filepath.Join(dir, "README.md"), "")
+	// The file must not have been truncated by a self-copy walk.
+	assertFileContent(t, filepath.Join(dir, "README.md"), "docs")
 }
 
 // TestCopyChangelogs_UnreadableSourceFile verifies that a source file which

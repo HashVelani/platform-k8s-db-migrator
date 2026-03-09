@@ -240,6 +240,33 @@ func TestCopyChangelogs_SrcEqualsDest_NoMasterFile_IsNoOp(t *testing.T) {
 	assertFileContent(t, filepath.Join(dir, "README.md"), "docs")
 }
 
+// TestCopyChangelogs_WalkError_InaccessibleSubdir verifies that when filepath.Walk
+// encounters a subdirectory it cannot read, the error is propagated and
+// CopyChangelogs returns an error (covers the "error walking source path" branch).
+func TestCopyChangelogs_WalkError_InaccessibleSubdir(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission test: running as root can traverse any directory")
+	}
+
+	src := t.TempDir()
+	dest := t.TempDir()
+
+	// A subdir with no permissions at all — Walk cannot read its contents.
+	subdir := filepath.Join(src, "locked")
+	if err := os.Mkdir(subdir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(subdir, 0o755) //nolint:errcheck
+
+	_, err := CopyChangelogs(src, dest)
+	if err == nil {
+		t.Fatal("expected error when a subdir is inaccessible during walk, got nil")
+	}
+	if !strings.Contains(err.Error(), "error walking source path") {
+		t.Errorf("expected 'error walking source path' in error, got: %v", err)
+	}
+}
+
 // TestCopyChangelogs_UnreadableSourceFile verifies that a source file which
 // exists but cannot be opened causes CopyChangelogs to return an error.
 func TestCopyChangelogs_UnreadableSourceFile(t *testing.T) {

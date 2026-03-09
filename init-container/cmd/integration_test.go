@@ -153,6 +153,50 @@ func TestExecute_Integration_NewVersionDeployed(t *testing.T) {
 	assertFileContent(t, filepath.Join(dest, "migration-action.txt"), "update")
 }
 
+// TestExecute_Integration_SrcEqualsDest verifies end-to-end behaviour when
+// CHANGELOG_SOURCE_PATH and CHANGELOG_DEST_PATH are the same directory, as
+// happens in Kubernetes when the service image init container has already
+// copied changelogs into the shared emptyDir before the platform init container
+// runs. The self-copy guard must fire, leaving the changelog intact, and the
+// DB query must proceed — producing action=update on a fresh database.
+func TestExecute_Integration_SrcEqualsDest(t *testing.T) {
+	dsn, cleanup := startPostgresForCmd(t)
+	defer cleanup()
+
+	// A single shared directory plays both src and dest roles.
+	shared := t.TempDir()
+
+	// Pre-populate the shared dir with a real changelog, simulating what the
+	// service image init container would have written before us.
+	if err := os.WriteFile(
+		filepath.Join(shared, changelogMasterFilename),
+		[]byte(changelogXML),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	m := map[string]string{
+		"CHANGELOG_SOURCE_PATH":      shared,
+		"CHANGELOG_DEST_PATH":        shared, // intentionally the same
+		"SERVICE_NAME":               "integration-test-service",
+		"SERVICE_IMAGE":              "test-image:latest",
+		"SPRING_DATASOURCE_URL":      dsn,
+		"SPRING_DATASOURCE_USERNAME": "testuser",
+		"SPRING_DATASOURCE_PASSWORD": "testpass",
+	}
+
+	if err := run(env(m)); err != nil {
+		t.Fatalf("run failed with src==dest on fresh database: %v", err)
+	}
+
+	// The master changelog must NOT have been truncated by a self-copy walk.
+	assertFileContent(t, filepath.Join(shared, changelogMasterFilename), changelogXML)
+
+	// Fresh DB → update.
+	assertFileContent(t, filepath.Join(shared, "migration-action.txt"), "update")
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func seedDB(t *testing.T, dsn string, n int) {

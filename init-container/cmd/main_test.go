@@ -292,6 +292,46 @@ func TestExecute_SrcDoesNotExist(t *testing.T) {
 	}
 }
 
+// TestWriteEmptyChangelog_MkdirAllFails verifies that writeEmptyChangelog
+// returns an error when dest's parent directory is unwritable, so MkdirAll
+// cannot create the directory.
+func TestWriteEmptyChangelog_MkdirAllFails(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission test: running as root can write anywhere")
+	}
+
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(parent, 0o755) //nolint:errcheck
+
+	dest := filepath.Join(parent, "newdir")
+	if err := writeEmptyChangelog(dest); err == nil {
+		t.Fatal("expected error when dest parent is unwritable, got nil")
+	}
+}
+
+// TestWriteEmptyChangelog_WriteFileFails verifies that writeEmptyChangelog
+// returns an error when dest exists but has no write permission, so
+// os.WriteFile cannot create the changelog file.
+func TestWriteEmptyChangelog_WriteFileFails(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission test: running as root can write anywhere")
+	}
+
+	dest := t.TempDir()
+	if err := os.Chmod(dest, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dest, 0o755) //nolint:errcheck
+
+	// MkdirAll succeeds (dest already exists); WriteFile must fail.
+	if err := writeEmptyChangelog(dest); err == nil {
+		t.Fatal("expected error when dest is read-only, got nil")
+	}
+}
+
 // TestEmptyChangelog_ContainsRequiredXMLNamespaces is a regression guard that
 // ensures emptyChangelog always includes the xmlns:xsi namespace binding and
 // xsi:schemaLocation attribute that Liquibase needs to resolve the

@@ -30,6 +30,33 @@ func run(getenv func(string) string) error {
 	return execute(getenv, db.GetAppliedChangesetCount)
 }
 
+// changelogMasterFilename is the single source of truth for the master
+// changelog filename. It must match the --changeLogFile arg in the Liquibase
+// Job container spec and the file present in the service image at
+// src/main/resources/db/changelog/db.changelog-master.xml.
+const changelogMasterFilename = "db.changelog-master.xml"
+
+// emptyChangelog is a minimal valid Liquibase changelog with no changesets.
+// Liquibase reads it, finds no changesets, logs "up to date", and exits 0.
+const emptyChangelog = `<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"/>
+`
+
+// writeEmptyChangelog writes emptyChangelog to dest/changelogMasterFilename so
+// that the Liquibase container finds a valid (empty) changelog and exits 0
+// without applying any changesets. This handles services that have no database.
+func writeEmptyChangelog(dest string) error {
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return fmt.Errorf("cannot create changelog destination %q: %w", dest, err)
+	}
+	path := filepath.Join(dest, changelogMasterFilename)
+	if err := os.WriteFile(path, []byte(emptyChangelog), 0o644); err != nil {
+		return fmt.Errorf("cannot write empty changelog to %q: %w", path, err)
+	}
+	slog.Info("wrote empty changelog for service with no database", "path", path)
+	return nil
+}
+
 // execute is the testable core. queryDB is injected so tests can supply a
 // controlled implementation without requiring a live PostgreSQL instance.
 //
@@ -69,9 +96,10 @@ func execute(getenv func(string) string, queryDB func(context.Context, string) (
 		return fmt.Errorf("failed to copy changelogs: %w", err)
 	}
 	if !srcExists {
-		// Source path did not exist in the service image; copy.go already
-		// logged an info message. Exit 0 — no changelogs means no migration.
-		return nil
+		// Source path did not exist in the service image. Write a minimal valid
+		// empty changelog so the Liquibase container finds its expected file,
+		// logs "up to date", and exits 0. No DB work is needed.
+		return writeEmptyChangelog(dest)
 	}
 
 	slog.Info("changelogs copied successfully",

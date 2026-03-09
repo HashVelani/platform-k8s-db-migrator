@@ -241,9 +241,22 @@ func TestExecute_SrcDoesNotExist(t *testing.T) {
 		t.Fatalf("expected graceful exit when src does not exist, got: %v", err)
 	}
 
-	// migration-action.txt must NOT be written when source path is missing.
+	// migration-action.txt must NOT be written: the DB check is skipped.
 	if _, err := os.Stat(filepath.Join(dest, "migration-action.txt")); !os.IsNotExist(err) {
 		t.Error("migration-action.txt must not be written when source path does not exist")
+	}
+
+	// An empty changelog must be written so Liquibase can find a valid file,
+	// read no changesets, and exit 0 instead of throwing ChangeLogParseException.
+	data, err := os.ReadFile(filepath.Join(dest, "db.changelog-master.xml"))
+	if err != nil {
+		t.Fatalf("empty changelog must be written to dest when source path does not exist: %v", err)
+	}
+	if !strings.Contains(string(data), "<databaseChangeLog") {
+		t.Errorf("empty changelog must contain <databaseChangeLog> element, got: %s", data)
+	}
+	if strings.Contains(string(data), "<changeSet") {
+		t.Error("empty changelog must not contain any <changeSet elements")
 	}
 }
 

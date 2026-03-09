@@ -14,6 +14,25 @@ import (
 	"github.com/your-org/platform-k8s-db-migrator/init-container/internal/decision"
 )
 
+// emptyChangelogFilename is the name of the placeholder changelog written to
+// the shared emptyDir when the service image has no changelog source directory.
+// It must match the --changeLogFile value configured in the Liquibase container
+// args (see docs/onboarding.md).
+const emptyChangelogFilename = "db.changelog-master.xml"
+
+// emptyChangelogXML is a minimal valid Liquibase changelog with no changesets.
+// Liquibase reads it, finds no pending work, logs "Database is up to date",
+// and exits 0 — preventing ChangeLogParseException when the service image has
+// no changelog directory.
+const emptyChangelogXML = `<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+    <!-- no changesets — service does not use a database -->
+</databaseChangeLog>`
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -69,8 +88,22 @@ func execute(getenv func(string) string, queryDB func(context.Context, string) (
 		return fmt.Errorf("failed to copy changelogs: %w", err)
 	}
 	if !srcExists {
-		// Source path did not exist in the service image; copy.go already
-		// logged an info message. Exit 0 — no changelogs means no migration.
+		// Source path did not exist in the service image. Write a minimal
+		// valid empty changelog to the shared emptyDir so that Liquibase can
+		// read a valid file, find no pending changesets, and exit 0 cleanly.
+		// Without this, Liquibase throws ChangeLogParseException because
+		// --changeLogFile points to a file that does not exist in /changelogs.
+		emptyPath := filepath.Join(dest, emptyChangelogFilename)
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return fmt.Errorf("failed to create changelog destination: %w", err)
+		}
+		if err := os.WriteFile(emptyPath, []byte(emptyChangelogXML), 0o644); err != nil {
+			return fmt.Errorf("failed to write empty changelog: %w", err)
+		}
+		slog.Info("no changelog source in service image — wrote empty changelog so Liquibase exits cleanly",
+			"service", serviceName,
+			"path", emptyPath,
+		)
 		return nil
 	}
 

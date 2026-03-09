@@ -251,6 +251,26 @@ func TestExecute_SrcDoesNotExist(t *testing.T) {
 	}
 }
 
+// TestEmptyChangelog_ContainsRequiredXMLNamespaces is a regression guard that
+// ensures emptyChangelog always includes the xmlns:xsi namespace binding and
+// xsi:schemaLocation attribute that Liquibase needs to resolve the
+// databaseChangeLog schema declaration. Without both, Liquibase's XML
+// validator throws:
+//
+//	cvc-elt.1.a: Cannot find the declaration of element 'databaseChangeLog'.
+func TestEmptyChangelog_ContainsRequiredXMLNamespaces(t *testing.T) {
+	requiredSubstrings := []string{
+		`xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`,
+		`xsi:schemaLocation=`,
+		`http://www.liquibase.org/xml/ns/dbchangelog`,
+	}
+	for _, substr := range requiredSubstrings {
+		if !strings.Contains(emptyChangelog, substr) {
+			t.Errorf("emptyChangelog is missing required XML attribute/value %q — Liquibase will throw SAXParseException without it", substr)
+		}
+	}
+}
+
 func TestExecute_DBQueryFails(t *testing.T) {
 	m, _ := validEnv(t)
 

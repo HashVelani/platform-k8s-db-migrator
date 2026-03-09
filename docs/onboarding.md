@@ -125,17 +125,34 @@ spec:
                 exit 0
               fi
               ACTION=$(cat "$ACTION_FILE")
-              if [ "$ACTION" != "update" ]; then
-                echo "Migration action is '$ACTION' — nothing to do, skipping Liquibase"
-                exit 0
-              fi
+              case "$ACTION" in
+                none)
+                  echo "Migration action is 'none' — database already up to date, skipping Liquibase"
+                  exit 0
+                  ;;
+                update)
+                  LIQUIBASE_CMD="update"
+                  ;;
+                rollback)
+                  echo "Migration action is 'rollback' — running Liquibase rollback"
+                  LIQUIBASE_CMD="rollback"
+                  ;;
+                block)
+                  echo "Migration action is 'block' — failing Job to block deployment"
+                  exit 1
+                  ;;
+                *)
+                  echo "Unknown migration action '$ACTION' — failing Job to avoid masking migration problems"
+                  exit 1
+                  ;;
+              esac
               exec /liquibase/liquibase \
                 --searchPath=/changelogs \
                 --changeLogFile=changelog-master.xml \
                 --url="$SPRING_DATASOURCE_URL" \
                 --username="$SPRING_DATASOURCE_USERNAME" \
                 --password="$SPRING_DATASOURCE_PASSWORD" \
-                update
+                "$LIQUIBASE_CMD"
           envFrom:
             - configMapRef:
                 name: <service-name>-config

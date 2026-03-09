@@ -35,6 +35,22 @@ func CopyChangelogs(src, dest string) (srcExists bool, err error) {
 		return false, fmt.Errorf("changelog destination path %q is not writable (emptyDir not mounted?): %w", dest, err)
 	}
 
+	// When src and dest resolve to the same absolute path, walking and copying
+	// files in-place would truncate each file's content: copyFile opens the
+	// destination with O_TRUNC before reading the source, zeroing the content
+	// of the same underlying inode. If the master changelog already exists
+	// there, the files were provided by a prior step (e.g. the service image
+	// init container) — skip the walk and return success without clobbering.
+	absSrc, errSrc := filepath.Abs(src)
+	absDest, errDest := filepath.Abs(dest)
+	if errSrc == nil && errDest == nil && absSrc == absDest {
+		masterFile := filepath.Join(src, "db.changelog-master.xml")
+		if _, err := os.Stat(masterFile); err == nil {
+		slog.Info("changelog master file found, skipping self-copy to prevent file truncation", "path", masterFile)
+			return true, nil
+		}
+	}
+
 	if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return fmt.Errorf("error walking source path %q: %w", path, err)

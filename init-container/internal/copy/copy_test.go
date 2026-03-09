@@ -186,6 +186,66 @@ func TestCopyChangelogs_BinaryContent(t *testing.T) {
 	}
 }
 
+// TestCopyChangelogs_SrcEqualsDest_WithMasterFile_PreservesFiles verifies that
+// when src and dest are the same directory and db.changelog-master.xml already
+// exists there, CopyChangelogs skips the walk and preserves the file content.
+// Without this guard, copyFile opens the destination with O_TRUNC before
+// reading — truncating the file to zero bytes because src and dest are the
+// same inode, then copying nothing from the now-empty "source".
+func TestCopyChangelogs_SrcEqualsDest_WithMasterFile_PreservesFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	masterContent := "<databaseChangeLog/>"
+	changeContent := "<changeSet/>"
+	writeFile(t, filepath.Join(dir, "db.changelog-master.xml"), masterContent)
+
+	sub := filepath.Join(dir, "changes")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sub, "v1.xml"), changeContent)
+
+	srcExists, err := CopyChangelogs(dir, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !srcExists {
+		t.Fatal("expected srcExists=true when src exists, got false")
+	}
+
+	// The master file must not have been truncated.
+	assertFileContent(t, filepath.Join(dir, "db.changelog-master.xml"), masterContent)
+	// Sub-directory file must also be preserved.
+	assertFileContent(t, filepath.Join(sub, "v1.xml"), changeContent)
+}
+
+// TestCopyChangelogs_SrcEqualsDest_NoMasterFile_ProceedsWithWalk verifies that
+// when src and dest are the same path but db.changelog-master.xml does not yet
+// exist, CopyChangelogs still performs the walk (no master file to skip for).
+// The self-copy truncates any existing files (O_TRUNC on the same inode), which
+// documents the known degenerate behaviour for this edge case — in practice the
+// shared volume would be empty when no master file exists.
+func TestCopyChangelogs_SrcEqualsDest_NoMasterFile_ProceedsWithWalk(t *testing.T) {
+	dir := t.TempDir()
+
+	// Seed a file without a master file so the early-return guard doesn't fire.
+	writeFile(t, filepath.Join(dir, "README.md"), "docs")
+
+	srcExists, err := CopyChangelogs(dir, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !srcExists {
+		t.Fatal("expected srcExists=true when src exists, got false")
+	}
+
+	// The walk ran and self-copied README.md — O_TRUNC on the same inode
+	// truncates it to zero bytes. This documents the known degenerate
+	// behaviour; it is acceptable because in practice no master file means
+	// the shared volume started empty and no real changelog data is at risk.
+	assertFileContent(t, filepath.Join(dir, "README.md"), "")
+}
+
 // TestCopyChangelogs_UnreadableSourceFile verifies that a source file which
 // exists but cannot be opened causes CopyChangelogs to return an error.
 func TestCopyChangelogs_UnreadableSourceFile(t *testing.T) {

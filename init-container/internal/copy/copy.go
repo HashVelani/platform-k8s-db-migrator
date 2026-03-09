@@ -12,24 +12,29 @@ import (
 // This runs inside the Job pod init container using the service image.
 // The service image has changelogs baked in at /db/changelog/ as loose files.
 // Dest is an emptyDir volume shared with the liquibase runner main container.
-func CopyChangelogs(src, dest string) error {
+//
+// The second return value reports whether any copying was performed.
+// (false, nil) means the source path did not exist — the caller should exit 0
+// gracefully without querying the database.
+func CopyChangelogs(src, dest string) (bool, error) {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("changelog source path %q does not exist: service image is missing COPY /db/changelog/ in its Dockerfile", src)
+			slog.Info("changelog source path does not exist, skipping copy", "src", src)
+			return false, nil
 		}
-		return fmt.Errorf("cannot access changelog source path %q: %w", src, err)
+		return false, fmt.Errorf("cannot access changelog source path %q: %w", src, err)
 	}
 	if !srcInfo.IsDir() {
-		return fmt.Errorf("changelog source path %q is not a directory", src)
+		return false, fmt.Errorf("changelog source path %q is not a directory", src)
 	}
 
 	// Verify dest is writable by attempting to stat or create it.
 	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return fmt.Errorf("changelog destination path %q is not writable (emptyDir not mounted?): %w", dest, err)
+		return false, fmt.Errorf("changelog destination path %q is not writable (emptyDir not mounted?): %w", dest, err)
 	}
 
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return fmt.Errorf("error walking source path %q: %w", path, err)
 		}
@@ -55,7 +60,11 @@ func CopyChangelogs(src, dest string) error {
 
 		slog.Info("copied changelog file", "src", path, "dest", destPath)
 		return nil
-	})
+	}); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func copyFile(src, dest string, mode os.FileMode) error {

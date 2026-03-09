@@ -143,15 +143,19 @@ jobs:
   # ── 3. Build, push, smoke-test — main branch and semver tags only ───────────
   #
   # Feature branches: this job is skipped. Tests above still run.
-  # main push:   image tagged  <repo>:<short-sha>  +  <repo>:latest
-  # v* tag push: image tagged  <repo>:<short-sha>  +  <repo>:<semver>  +  <repo>:latest
+  # main push:   auto-bumps patch from latest semver tag in the repo.
+  #              image tagged  <repo>:<short-sha>  +  <repo>:<semver>  +  <repo>:latest
+  #              repo tagged   sha-<short-sha>  +  <semver>
+  # v* tag push: uses the pushed tag as the semver (no auto-bump).
+  #              image tagged  <repo>:<short-sha>  +  <repo>:<semver>  +  <repo>:latest
+  #              repo tagged   sha-<short-sha>  (semver tag already exists)
   build-and-push:
     name: Build, push and smoke-test image
     runs-on: ubuntu-latest
     needs: [unit-tests, integration-tests]
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     permissions:
-      contents: read
+      contents: write
 
     services:
       postgres:
@@ -171,6 +175,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-tags: true   # required to read existing semver tags for auto-bump
 
       - name: Install buildah
         run: |
@@ -183,34 +189,57 @@ jobs:
         run: |
           printf '%s' "${DOCKER_PASSWORD}" | buildah login --username "${{ secrets.DOCKER_USERNAME }}" --password-stdin docker.io
 
+      - name: Determine next semver
+        id: semver
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # Explicit semver tag push — use the pushed tag directly.
+            echo "semver=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            # main branch push — inspect existing semver tags and bump patch.
+            # Use grep to enforce strict vMAJOR.MINOR.PATCH format, ruling out
+            # tags like v1.2.3.4 or v1.2.x that would break arithmetic expansion.
+            LATEST=$(git tag -l 'v*' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -1)
+            if [[ -z "${LATEST}" ]]; then
+              NEXT="v0.1.0"
+            else
+              IFS='.' read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+              if ! [[ "${MAJOR}" =~ ^[0-9]+$ && "${MINOR}" =~ ^[0-9]+$ && "${PATCH}" =~ ^[0-9]+$ ]]; then
+                echo "ERROR: could not parse semver components from tag '${LATEST}'" >&2
+                exit 1
+              fi
+              NEXT="v${MAJOR}.${MINOR}.$(( PATCH + 1 ))"
+            fi
+            echo "semver=${NEXT}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Determine image tags
         id: tags
         run: |
-          SHORT_SHA="${GITHUB_SHA:0:7}"
+          SHORT_SHA="${{ steps.semver.outputs.short_sha }}"
+          SEMVER="${{ steps.semver.outputs.semver }}"
           SHA_TAG="${DOCKERHUB_REPOSITORY}:${SHORT_SHA}"
 
-          # Every publish gets a short-SHA tag so every image is individually
-          # addressable by the commit that produced it.
-          TAGS="${SHA_TAG}"
+          # Docker tags use plain numeric semver (e.g. 1.0.0) without the
+          # leading 'v' — the v prefix is kept only on the git tag.
+          DOCKER_SEMVER="${SEMVER#v}"
 
-          # main branch: also tag as :latest so the most recent stable build
-          # is always reachable without knowing the SHA.
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
-            TAGS="${TAGS},${DOCKERHUB_REPOSITORY}:latest"
-          fi
-
-          # Semver tag (e.g. v1.2.3): also tag with the version string so teams
-          # can pin to a specific release in their GitOps manifests.
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            TAGS="${TAGS},${DOCKERHUB_REPOSITORY}:${GITHUB_REF_NAME}"
-            TAGS="${TAGS},${DOCKERHUB_REPOSITORY}:latest"
-          fi
+          # Every build gets shortsha + semver + latest so every image is
+          # addressable by commit, by release version, and as the current tip.
+          TAGS="${SHA_TAG},${DOCKERHUB_REPOSITORY}:${DOCKER_SEMVER},${DOCKERHUB_REPOSITORY}:latest"
 
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
           # The short-SHA tag is always produced; use it to pull the image in
           # the smoke test so we know we're testing exactly what was just pushed.
           echo "primary=${SHA_TAG}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
 
       - name: Build Docker image
         run: |
@@ -225,11 +254,32 @@ jobs:
             buildah push "${tag}" "docker://${tag}"
           done
 
+      - name: Tag repo with shortsha and semver
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          SHORT_SHA="${{ steps.semver.outputs.short_sha }}"
+          SEMVER="${{ steps.semver.outputs.semver }}"
+
+          # Short SHA tag — named after the commit SHA so it always refers to the
+          # same commit; force-push is safe and makes re-runs idempotent.
+          git tag -f "sha-${SHORT_SHA}"
+          git push origin "sha-${SHORT_SHA}" --force
+
+          # Semver tag — only create and push on main branch pushes.
+          # For v* tag pushes the tag already exists (it triggered this run).
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            git tag "${SEMVER}"
+            git push origin "${SEMVER}"
+          fi
+
       - name: Annotate build summary with image tags
         run: |
           echo "## 🐳 Image Published" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Short SHA:** \`${{ steps.tags.outputs.short_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Short SHA:** \`${{ steps.semver.outputs.short_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Semver:** \`${{ steps.semver.outputs.semver }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Tags pushed:**" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -296,6 +346,29 @@ jobs:
             exit 1
           fi
           echo "Smoke test passed: graceful exit with no changelog files"
+
+      - name: Smoke test — missing source path exits gracefully
+        run: |
+          MISSING_DEST=$(mktemp -d)
+
+          # Do NOT mount /db/changelog — the path must not exist in the container.
+          docker run --rm \
+            --network host \
+            -v "${MISSING_DEST}":/changelogs \
+            -e CHANGELOG_SOURCE_PATH=/db/changelog \
+            -e CHANGELOG_DEST_PATH=/changelogs \
+            -e SERVICE_NAME=smoke-test-missing-path \
+            -e SERVICE_IMAGE=smoke-test:latest \
+            -e 'SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/smoketest?sslmode=disable' \
+            -e SPRING_DATASOURCE_USERNAME=smoketest \
+            -e SPRING_DATASOURCE_PASSWORD=smoketest \
+            "${{ steps.tags.outputs.primary }}"
+
+          if [[ -f "${MISSING_DEST}/migration-action.txt" ]]; then
+            echo "ERROR: migration-action.txt must not be written when source path does not exist"
+            exit 1
+          fi
+          echo "Smoke test passed: graceful exit with missing source path"
 
       - name: Prune images
         if: always()

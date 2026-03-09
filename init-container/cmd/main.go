@@ -64,8 +64,14 @@ func execute(getenv func(string) string, queryDB func(context.Context, string) (
 		"dest", dest,
 	)
 
-	if err := copy.CopyChangelogs(src, dest); err != nil {
+	copied, err := copy.CopyChangelogs(src, dest)
+	if err != nil {
 		return fmt.Errorf("failed to copy changelogs: %w", err)
+	}
+	if !copied {
+		// Source path did not exist in the service image; copy.go already
+		// logged an info message. Exit 0 — no changelogs means no migration.
+		return nil
 	}
 
 	slog.Info("changelogs copied successfully",

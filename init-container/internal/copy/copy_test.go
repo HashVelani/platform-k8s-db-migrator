@@ -17,8 +17,12 @@ func TestCopyChangelogs_Success(t *testing.T) {
 	writeFile(t, filepath.Join(src, "changelog-master.xml"), "<root/>")
 	writeFile(t, filepath.Join(src, "subdir", "v1.xml"), "<change/>")
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	copied, err := CopyChangelogs(src, dest)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !copied {
+		t.Fatal("expected copied=true for existing src, got false")
 	}
 
 	assertFileContent(t, filepath.Join(dest, "changelog-master.xml"), "<root/>")
@@ -29,12 +33,12 @@ func TestCopyChangelogs_MissingSrc(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "does-not-exist")
 	dest := t.TempDir()
 
-	err := CopyChangelogs(src, dest)
-	if err == nil {
-		t.Fatal("expected error for missing src, got nil")
+	copied, err := CopyChangelogs(src, dest)
+	if err != nil {
+		t.Fatalf("expected no error for missing src (graceful exit), got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "does not exist") {
-		t.Errorf("error should mention does not exist, got: %v", err)
+	if copied {
+		t.Fatal("expected copied=false when src does not exist, got true")
 	}
 }
 
@@ -44,7 +48,7 @@ func TestCopyChangelogs_SrcIsFile(t *testing.T) {
 	writeFile(t, src, "<root/>")
 	dest := t.TempDir()
 
-	err := CopyChangelogs(src, dest)
+	_, err := CopyChangelogs(src, dest)
 	if err == nil {
 		t.Fatal("expected error when src is a file, not a directory")
 	}
@@ -56,7 +60,7 @@ func TestCopyChangelogs_DestCreatedIfMissing(t *testing.T) {
 
 	dest := filepath.Join(t.TempDir(), "newdir")
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	if _, err := CopyChangelogs(src, dest); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -67,7 +71,7 @@ func TestCopyChangelogs_EmptySrc(t *testing.T) {
 	src := t.TempDir()
 	dest := t.TempDir()
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	if _, err := CopyChangelogs(src, dest); err != nil {
 		t.Fatalf("unexpected error for empty src: %v", err)
 	}
 }
@@ -82,7 +86,7 @@ func TestCopyChangelogs_DeeplyNested(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(deep, "deep.xml"), "<deep/>")
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	if _, err := CopyChangelogs(src, dest); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -96,7 +100,7 @@ func TestCopyChangelogs_OverwritesExistingFile(t *testing.T) {
 	writeFile(t, filepath.Join(src, "v1.xml"), "new-content")
 	writeFile(t, filepath.Join(dest, "v1.xml"), "stale-content")
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	if _, err := CopyChangelogs(src, dest); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -113,7 +117,7 @@ func TestCopyChangelogs_PreservesFileMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	if _, err := CopyChangelogs(src, dest); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -134,7 +138,7 @@ func TestCopyChangelogs_MultipleFilesAtRoot(t *testing.T) {
 		writeFile(t, filepath.Join(src, name), name)
 	}
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	if _, err := CopyChangelogs(src, dest); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -151,7 +155,7 @@ func TestCopyChangelogs_EmptyFile(t *testing.T) {
 
 	writeFile(t, filepath.Join(src, "empty.xml"), "")
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	if _, err := CopyChangelogs(src, dest); err != nil {
 		t.Fatalf("unexpected error copying empty file: %v", err)
 	}
 
@@ -169,7 +173,7 @@ func TestCopyChangelogs_BinaryContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CopyChangelogs(src, dest); err != nil {
+	if _, err := CopyChangelogs(src, dest); err != nil {
 		t.Fatalf("unexpected error copying binary file: %v", err)
 	}
 
@@ -199,7 +203,7 @@ func TestCopyChangelogs_UnreadableSourceFile(t *testing.T) {
 	}
 	defer os.Chmod(unreadable, 0o644) //nolint:errcheck
 
-	err := CopyChangelogs(src, dest)
+	_, err := CopyChangelogs(src, dest)
 	if err == nil {
 		t.Fatal("expected error for unreadable source file, got nil")
 	}
@@ -221,7 +225,7 @@ func TestCopyChangelogs_UnwritableDest(t *testing.T) {
 	}
 	defer os.Chmod(dest, 0o755) //nolint:errcheck
 
-	err := CopyChangelogs(src, dest)
+	_, err := CopyChangelogs(src, dest)
 	if err == nil {
 		t.Fatal("expected error for unwritable destination, got nil")
 	}
@@ -245,7 +249,7 @@ func TestCopyChangelogs_InaccessibleSourcePath(t *testing.T) {
 	defer os.Chmod(parent, 0o755) //nolint:errcheck
 
 	src := filepath.Join(parent, "nested")
-	err := CopyChangelogs(src, t.TempDir())
+	_, err := CopyChangelogs(src, t.TempDir())
 	if err == nil {
 		t.Fatal("expected error for inaccessible source path, got nil")
 	}

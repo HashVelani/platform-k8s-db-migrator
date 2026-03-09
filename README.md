@@ -12,13 +12,15 @@ MIGRATION JOB POD  (ArgoCD PreSync hook — runs before every deployment)
 Init container: platform-k8s-db-migrator/init-container  (THIS REPO)
   Phase 1 (implemented): copies /db/changelog/ from service image
                          into emptyDir shared with liquibase runner
-  Phase 2 (stubbed):     region detection, DB state check,
-                         forward/rollback direction decision
+  Phase 2 (implemented): DB state check, writes migration-action.txt
+                         (update | none) to the emptyDir volume
+  Phase 3 (stubbed):     rollback detection
+  Phase 4 (stubbed):     region-based deployment blocking
 
-Main container: liquibase/liquibase:latest  (NOT this repo)
+Main container: liquibase/liquibase  (NOT this repo)
   Reads changelogs from emptyDir
   Phase 1: runs liquibase update
-  Phase 2: runs update or rollback based on init container decision
+  Phase 2+: runs update or rollback based on migration-action.txt
 ──────────────────────────────────────────────────────────────────────
        emptyDir volume (/changelogs) bridges the two containers
 ──────────────────────────────────────────────────────────────────────
@@ -85,6 +87,7 @@ Requirements: Go 1.22+, Docker (for image build).
 
 ## Docs
 
+- [GitOps deployment contract](docs/gitops-deployment-contract.md) — what your GitOps manifests must provide
 - [Onboarding guide](docs/onboarding.md)
 - [Runbook: migration failed](docs/runbook-migration-failed.md)
 - [Runbook: rollback](docs/runbook-rollback.md)

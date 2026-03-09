@@ -76,7 +76,7 @@ func validEnv(t *testing.T) (map[string]string, string) {
 	dest := t.TempDir()
 
 	if err := os.WriteFile(
-		filepath.Join(src, "changelog-master.xml"),
+		filepath.Join(src, changelogMasterFilename),
 		[]byte(changelogXML),
 		0o644,
 	); err != nil {
@@ -104,7 +104,7 @@ func TestExecute_FreshDB_WritesUpdateAction(t *testing.T) {
 	}
 
 	// Changelog must be copied.
-	assertFileContent(t, filepath.Join(dest, "changelog-master.xml"), changelogXML)
+	assertFileContent(t, filepath.Join(dest, changelogMasterFilename), changelogXML)
 
 	// Fresh DB (0 applied) vs 1 changelog changeset → update.
 	assertFileContent(t, filepath.Join(dest, "migration-action.txt"), "update")
@@ -125,7 +125,7 @@ func TestExecute_NewVersionDeployed_WritesUpdateAction(t *testing.T) {
 	m, dest := validEnv(t)
 	// Replace the fixture with a changelog that has 2 changesets.
 	if err := os.WriteFile(
-		filepath.Join(m["CHANGELOG_SOURCE_PATH"], "changelog-master.xml"),
+		filepath.Join(m["CHANGELOG_SOURCE_PATH"], changelogMasterFilename),
 		[]byte(twoChangesetXML),
 		0o644,
 	); err != nil {
@@ -241,7 +241,11 @@ func TestExecute_SrcDoesNotExist(t *testing.T) {
 		t.Fatalf("expected graceful exit when src does not exist, got: %v", err)
 	}
 
-	// migration-action.txt must NOT be written when source path is missing.
+	// An empty changelog must be written so the Liquibase container finds its
+	// expected file, logs "up to date", and exits 0 without applying anything.
+	assertFileContent(t, filepath.Join(dest, changelogMasterFilename), emptyChangelog)
+
+	// migration-action.txt must NOT be written: there is no database work to do.
 	if _, err := os.Stat(filepath.Join(dest, "migration-action.txt")); !os.IsNotExist(err) {
 		t.Error("migration-action.txt must not be written when source path does not exist")
 	}

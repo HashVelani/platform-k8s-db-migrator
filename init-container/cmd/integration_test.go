@@ -69,7 +69,7 @@ func integrationEnv(t *testing.T, dsn string) (map[string]string, string) {
 	dest := t.TempDir()
 
 	if err := os.WriteFile(
-		filepath.Join(src, "changelog-master.xml"),
+		filepath.Join(src, changelogMasterFilename),
 		[]byte(changelogXML),
 		0o644,
 	); err != nil {
@@ -100,8 +100,8 @@ func TestExecute_Integration_FreshDatabase(t *testing.T) {
 	}
 
 	// Changelog file must exist in dest.
-	if _, err := os.Stat(filepath.Join(dest, "changelog-master.xml")); err != nil {
-		t.Errorf("expected changelog-master.xml in dest: %v", err)
+	if _, err := os.Stat(filepath.Join(dest, changelogMasterFilename)); err != nil {
+		t.Errorf("expected %s in dest: %v", changelogMasterFilename, err)
 	}
 
 	// Fresh DB → update.
@@ -138,7 +138,7 @@ func TestExecute_Integration_NewVersionDeployed(t *testing.T) {
 	m, dest := integrationEnv(t, dsn)
 	// Override changelog fixture with one that has 2 changesets.
 	if err := os.WriteFile(
-		filepath.Join(m["CHANGELOG_SOURCE_PATH"], "changelog-master.xml"),
+		filepath.Join(m["CHANGELOG_SOURCE_PATH"], changelogMasterFilename),
 		[]byte(twoChangesetXML),
 		0o644,
 	); err != nil {
@@ -196,7 +196,7 @@ func seedDB(t *testing.T, dsn string, n int) {
 			INSERT INTO databasechangelog
 				(id, author, filename, dateexecuted, orderexecuted, exectype)
 			VALUES ($1, $2, $3, NOW(), $4, 'EXECUTED')`,
-			fmt.Sprintf("changeset-%d", i), "platform", "changelog-master.xml", i)
+			fmt.Sprintf("changeset-%d", i), "platform", changelogMasterFilename, i)
 		if err != nil {
 			t.Fatalf("seedDB: insert changeset %d: %v", i, err)
 		}

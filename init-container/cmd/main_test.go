@@ -94,6 +94,47 @@ func validEnv(t *testing.T) (map[string]string, string) {
 	}, dest
 }
 
+// TestExecute_SrcEqualsDestWithRealChangelogs_ProceedsToDBCheck verifies the
+// scenario where CHANGELOG_SOURCE_PATH and CHANGELOG_DEST_PATH point to the
+// same directory (the emptyDir shared volume), as happens when the service
+// image init container has already copied changelogs there. The platform init
+// container must NOT truncate those files via self-copy; it must read them,
+// count their changesets, and proceed to the DB check normally.
+func TestExecute_SrcEqualsDestWithRealChangelogs_ProceedsToDBCheck(t *testing.T) {
+	shared := t.TempDir()
+
+	// Pre-populate the shared dir with a real changelog, simulating what the
+	// service image init container would have done before us.
+	if err := os.WriteFile(
+		filepath.Join(shared, changelogMasterFilename),
+		[]byte(changelogXML),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	m := map[string]string{
+		"CHANGELOG_SOURCE_PATH":      shared,
+		"CHANGELOG_DEST_PATH":        shared, // intentionally the same
+		"SERVICE_NAME":               "test-service",
+		"SERVICE_IMAGE":              "test-image:latest",
+		"SPRING_DATASOURCE_URL":      "jdbc:postgresql://localhost:5432/testdb",
+		"SPRING_DATASOURCE_USERNAME": "testuser",
+		"SPRING_DATASOURCE_PASSWORD": "testpass",
+	}
+
+	// freshDB returns 0 applied changesets; changelog has 1 → expect "update".
+	if err := execute(env(m), freshDB); err != nil {
+		t.Fatalf("expected no error when src==dest with real changelogs, got: %v", err)
+	}
+
+	// The master changelog must NOT have been truncated by a self-copy.
+	assertFileContent(t, filepath.Join(shared, changelogMasterFilename), changelogXML)
+
+	// Migration action must be written: the DB check must have run.
+	assertFileContent(t, filepath.Join(shared, "migration-action.txt"), "update")
+}
+
 // ── Phase 1 + 2 happy-path tests ─────────────────────────────────────────────
 
 func TestExecute_FreshDB_WritesUpdateAction(t *testing.T) {
@@ -248,6 +289,46 @@ func TestExecute_SrcDoesNotExist(t *testing.T) {
 	// migration-action.txt must NOT be written: there is no database work to do.
 	if _, err := os.Stat(filepath.Join(dest, "migration-action.txt")); !os.IsNotExist(err) {
 		t.Error("migration-action.txt must not be written when source path does not exist")
+	}
+}
+
+// TestWriteEmptyChangelog_MkdirAllFails verifies that writeEmptyChangelog
+// returns an error when dest's parent directory is unwritable, so MkdirAll
+// cannot create the directory.
+func TestWriteEmptyChangelog_MkdirAllFails(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission test: running as root can write anywhere")
+	}
+
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(parent, 0o755) //nolint:errcheck
+
+	dest := filepath.Join(parent, "newdir")
+	if err := writeEmptyChangelog(dest); err == nil {
+		t.Fatal("expected error when dest parent is unwritable, got nil")
+	}
+}
+
+// TestWriteEmptyChangelog_WriteFileFails verifies that writeEmptyChangelog
+// returns an error when dest exists but has no write permission, so
+// os.WriteFile cannot create the changelog file.
+func TestWriteEmptyChangelog_WriteFileFails(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission test: running as root can write anywhere")
+	}
+
+	dest := t.TempDir()
+	if err := os.Chmod(dest, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dest, 0o755) //nolint:errcheck
+
+	// MkdirAll succeeds (dest already exists); WriteFile must fail.
+	if err := writeEmptyChangelog(dest); err == nil {
+		t.Fatal("expected error when dest is read-only, got nil")
 	}
 }
 

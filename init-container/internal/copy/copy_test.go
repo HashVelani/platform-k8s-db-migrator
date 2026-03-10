@@ -186,6 +186,87 @@ func TestCopyChangelogs_BinaryContent(t *testing.T) {
 	}
 }
 
+// TestCopyChangelogs_SrcEqualsDest_PreservesFiles verifies that when src and
+// dest are the same directory, CopyChangelogs is a no-op regardless of what
+// files are present — no file is truncated and all content is preserved.
+// Without this guard, copyFile opens the destination with O_TRUNC before
+// reading — truncating the file to zero bytes because src and dest are the
+// same inode, then copying nothing from the now-empty "source".
+func TestCopyChangelogs_SrcEqualsDest_PreservesFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	masterContent := "<databaseChangeLog/>"
+	changeContent := "<changeSet/>"
+	writeFile(t, filepath.Join(dir, "db.changelog-master.xml"), masterContent)
+
+	sub := filepath.Join(dir, "changes")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sub, "v1.xml"), changeContent)
+
+	srcExists, err := CopyChangelogs(dir, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !srcExists {
+		t.Fatal("expected srcExists=true when src exists, got false")
+	}
+
+	// All files must be preserved — no walk, no O_TRUNC truncation.
+	assertFileContent(t, filepath.Join(dir, "db.changelog-master.xml"), masterContent)
+	assertFileContent(t, filepath.Join(sub, "v1.xml"), changeContent)
+}
+
+// TestCopyChangelogs_SrcEqualsDest_NoMasterFile_IsNoOp verifies that the
+// self-copy guard applies unconditionally: even when db.changelog-master.xml
+// is absent, CopyChangelogs returns (true, nil) without walking, preserving
+// any other files that happen to be present.
+func TestCopyChangelogs_SrcEqualsDest_NoMasterFile_IsNoOp(t *testing.T) {
+	dir := t.TempDir()
+
+	// Seed a file without a master changelog.
+	writeFile(t, filepath.Join(dir, "README.md"), "docs")
+
+	srcExists, err := CopyChangelogs(dir, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !srcExists {
+		t.Fatal("expected srcExists=true when src exists, got false")
+	}
+
+	// The file must not have been truncated by a self-copy walk.
+	assertFileContent(t, filepath.Join(dir, "README.md"), "docs")
+}
+
+// TestCopyChangelogs_WalkError_InaccessibleSubdir verifies that when filepath.Walk
+// encounters a subdirectory it cannot read, the error is propagated and
+// CopyChangelogs returns an error (covers the "error walking source path" branch).
+func TestCopyChangelogs_WalkError_InaccessibleSubdir(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission test: running as root can traverse any directory")
+	}
+
+	src := t.TempDir()
+	dest := t.TempDir()
+
+	// A subdir with no permissions at all — Walk cannot read its contents.
+	subdir := filepath.Join(src, "locked")
+	if err := os.Mkdir(subdir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(subdir, 0o755) //nolint:errcheck
+
+	_, err := CopyChangelogs(src, dest)
+	if err == nil {
+		t.Fatal("expected error when a subdir is inaccessible during walk, got nil")
+	}
+	if !strings.Contains(err.Error(), "error walking source path") {
+		t.Errorf("expected 'error walking source path' in error, got: %v", err)
+	}
+}
+
 // TestCopyChangelogs_UnreadableSourceFile verifies that a source file which
 // exists but cannot be opened causes CopyChangelogs to return an error.
 func TestCopyChangelogs_UnreadableSourceFile(t *testing.T) {

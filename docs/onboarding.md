@@ -148,7 +148,7 @@ spec:
               esac
               exec /liquibase/liquibase \
                 --searchPath=/changelogs \
-                --changeLogFile=changelog-master.xml \
+                --changeLogFile=db.changelog-master.xml \
                 --url="$SPRING_DATASOURCE_URL" \
                 --username="$SPRING_DATASOURCE_USERNAME" \
                 --password="$SPRING_DATASOURCE_PASSWORD" \

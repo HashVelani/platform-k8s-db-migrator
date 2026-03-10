@@ -86,5 +86,6 @@ Requirements: Go 1.22+, Docker (for image build).
 ## Docs
 
 - [Onboarding guide](docs/onboarding.md)
+- [Architecture: PreSync hook and sync-wave ordering](docs/architecture-sync-waves.md)
 - [Runbook: migration failed](docs/runbook-migration-failed.md)
 - [Runbook: rollback](docs/runbook-rollback.md)

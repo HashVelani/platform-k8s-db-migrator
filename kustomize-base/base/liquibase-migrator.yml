@@ -1,0 +1,121 @@
+# ArgoCD Sync hook — runs during every sync of reference-service.
+#
+# Sync-wave ordering (within the Sync phase):
+#   wave -2 : DB Secrets (db-admin, db-user, db-ro-user) — applied first so CNPG can bootstrap
+#   wave -1 : CNPG Cluster + ConfigMap — ArgoCD waits for Cluster to be Healthy before advancing
+#   wave  0 : This migration Job — DB is accepting connections, ConfigMap exists
+#   wave  1 : Deployment — started only after the migration Job completes
+#
+# Flow:
+#   1. init-changelogs (init container — platform-k8s-db-migrator image)
+#      - Copies /db/changelog/ from the service image into the shared emptyDir
+#
+#   2. liquibase (main container — liquibase/liquibase official image)
+#      - Reads changelogs from emptyDir
+#      - Runs liquibase update to apply any pending changesets
+#      - Connects as admin role (DDL privileges)
+#
+# Credentials:
+#   URL + username → reference-service-db-config ConfigMap
+#   Password       → reference-service-db-admin Secret (existing, no duplication)
+#
+# When bumping the service image tag:
+#   Update SERVICE_IMAGE env var below AND deployment.yaml to match.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: migration-trigger-sa
+  namespace: projects
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: reference-service-db-migration
+  namespace: projects
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: reference-service-db-migration
+    spec:
+      serviceAccountName: migration-trigger-sa
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: dockerhub
+      volumes:
+        - name: changelogs
+          emptyDir: {}
+      initContainers:
+        # ── Step 1: Copy changelogs from service image ──────────────────────
+        # Runs the SERVICE image with entrypoint overridden to cp only.
+        # JVM never boots. No Spring context. No app code.
+        # Copies /db/changelog/ into shared emptyDir and exits.
+        - name: copy-changelogs
+          image: hashvelani/reference-service-internal:v0.1.6
+          command: ["cp", "-r", "/db/changelog/.", "/changelogs/"]
+          volumeMounts:
+            - name: changelogs
+              mountPath: /changelogs
+
+        # ── Step 2: Platform logic ──────────────────────────────────────────
+        # Runs AFTER copy-changelogs completes successfully.
+        # Reads /changelogs (emptyDir populated by step 1).
+        # Phase 1: verifies files, writes action decision.
+        # Phase 2: region detection + forward/rollback logic.
+        - name: init-changelogs
+          image: hashvelani/platform-k8s-db-migrator:0.1.4
+          env:
+            - name: CHANGELOG_SOURCE_PATH
+              value: /changelogs
+            - name: CHANGELOG_DEST_PATH
+              value: /changelogs
+            - name: SERVICE_NAME
+              value: reference-service
+            - name: SERVICE_IMAGE
+              value: hashvelani/reference-service-internal:v0.1.6
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: reference-service-db-admin
+                  key: password
+          envFrom:
+            - configMapRef:
+                name: reference-service-db-config
+          volumeMounts:
+            - name: changelogs
+              mountPath: /changelogs
+
+      containers:
+        # ── Step 3: Run Liquibase ───────────────────────────────────────────
+        # Runs AFTER both init containers complete successfully.
+        # Reads changelogs from emptyDir populated by step 1.
+        # Connects using admin credentials — DDL privileges required.
+        # Runs liquibase update — applies any pending changesets.
+        - name: liquibase
+          image: liquibase/liquibase:4.29.2
+          args:
+            - --searchPath=/changelogs
+            - --changeLogFile=db.changelog-master.xml
+            - --url=$(SPRING_DATASOURCE_URL)
+            - --username=$(SPRING_DATASOURCE_USERNAME)
+            - --password=$(SPRING_DATASOURCE_PASSWORD)
+            - update
+          env:
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: reference-service-db-admin
+                  key: password
+          envFrom:
+            - configMapRef:
+                name: reference-service-db-config
+          volumeMounts:
+            - name: changelogs
+              mountPath: /changelogs

@@ -1,32 +1,72 @@
-# ArgoCD Sync hook — runs during every sync of reference-service.
+# ArgoCD PreSync hook — runs BEFORE every sync of reference-service.
 #
-# Sync-wave ordering (within the Sync phase):
-#   wave -2 : DB Secrets (db-admin, db-user, db-ro-user) — applied first so CNPG can bootstrap
-#   wave -1 : CNPG Cluster + ConfigMap — ArgoCD waits for Cluster to be Healthy before advancing
-#   wave  0 : This migration Job — DB is accepting connections, ConfigMap exists
-#   wave  1 : Deployment — started only after the migration Job completes
+# ── How ArgoCD hook + wave ordering works ────────────────────────────────────
 #
-# Flow:
-#   1. init-changelogs (init container — platform-k8s-db-migrator image)
-#      - Copies /db/changelog/ from the service image into the shared emptyDir
+# ArgoCD divides a sync operation into phases:
+#   PreSync  → hook resources run BEFORE the Sync phase starts
+#   Sync     → normal manifests (Deployments, Services, …) are applied
+#   PostSync → hook resources run AFTER all Sync resources are healthy
 #
-#   2. liquibase (main container — liquibase/liquibase official image)
-#      - Reads changelogs from emptyDir
-#      - Runs liquibase update to apply any pending changesets
-#      - Connects as admin role (DDL privileges)
+# Within each phase, sync-waves control ordering.  Resources at wave N must all
+# be Healthy / Succeeded before ArgoCD advances to wave N+1.  Waves are shared
+# across phases, so a PreSync hook at wave 0 is held back until all Sync-phase
+# resources at wave -1 have become Healthy first.
 #
-# Credentials:
-#   URL + username → reference-service-db-config ConfigMap
-#   Password       → reference-service-db-admin Secret (existing, no duplication)
+# Wave ordering for a full reference-service deployment:
+#   wave -2 : DB Secrets (db-admin, db-user, db-ro-user)
+#             Applied first so CNPG can consume them during bootstrap.
+#   wave -1 : CNPG Cluster + reference-service-db-config ConfigMap
+#             ArgoCD waits until the Cluster reports Healthy (all Pods ready,
+#             primary elected) before advancing — the database is now accepting
+#             connections.
+#   wave  0 : THIS migration Job (PreSync hook)
+#             Runs after the DB is confirmed healthy.  Applies any pending
+#             Liquibase changesets.  ArgoCD waits for the Job to Succeed before
+#             starting the Sync phase.
+#   wave  1 : reference-service Deployment (Sync phase)
+#             Starts only after the migration Job has Succeeded, guaranteeing
+#             the schema is ready before any application Pod boots.
 #
-# When bumping the service image tag:
-#   Update SERVICE_IMAGE env var below AND deployment.yaml to match.
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: migration-trigger-sa
-  namespace: projects
+# ── Inside the migration Job ──────────────────────────────────────────────────
+#
+# Kubernetes runs init containers sequentially (each must exit 0 before the
+# next starts) and then runs main containers in parallel.  This Job uses two
+# init containers + one main container:
+#
+#   Init 1 — copy-changelogs
+#     Runs the SERVICE image with its entrypoint replaced by a plain `cp`.
+#     The JVM never starts; no Spring context; no application code executes.
+#     Copies /db/changelog/ (baked into the service image at build time) into
+#     the shared emptyDir volume at /changelogs, then exits 0.
+#
+#   Init 2 — init-changelogs  (platform-k8s-db-migrator image — THIS REPO)
+#     CHANGELOG_SOURCE_PATH and CHANGELOG_DEST_PATH are BOTH set to /changelogs
+#     because copy-changelogs already populated the emptyDir.  The init
+#     container detects src == dest and skips the copy step (self-copy guard).
+#     It then:
+#       • Counts changeset elements in the XML files under /changelogs.
+#       • Queries DATABASECHANGELOG to count applied changesets.
+#       • Writes one of {update, none} to /changelogs/migration-action.txt.
+#
+#   Main — liquibase  (liquibase/liquibase official image)
+#     Reads migration-action.txt written by init-changelogs.
+#     If action == "update" → runs `liquibase update` to apply pending changesets.
+#     If action == "none"   → DB is already up to date; skips Liquibase; exits 0.
+#     Connects with DDL-privileged admin credentials from the Secret.
+#
+# ── Hook delete policy ────────────────────────────────────────────────────────
+#
+# BeforeHookCreation deletes the previous Job object before creating a new one
+# on every sync.  This keeps the namespace clean and avoids "already exists"
+# errors when ArgoCD retries or the image tag is unchanged.
+#
+# ── Credentials ───────────────────────────────────────────────────────────────
+#   URL + username → reference-service-db-config ConfigMap (envFrom)
+#   Password       → reference-service-db-admin Secret     (secretKeyRef)
+#
+# ── Updating the service image tag ───────────────────────────────────────────
+#   Update SERVICE_IMAGE env var in init-changelogs AND the image field of
+#   copy-changelogs AND deployment.yaml to match.
 ---
 apiVersion: batch/v1
 kind: Job
@@ -36,7 +76,7 @@ metadata:
   annotations:
     argocd.argoproj.io/hook: PreSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 600
@@ -53,10 +93,12 @@ spec:
         - name: changelogs
           emptyDir: {}
       initContainers:
-        # ── Step 1: Copy changelogs from service image ──────────────────────
-        # Runs the SERVICE image with entrypoint overridden to cp only.
-        # JVM never boots. No Spring context. No app code.
-        # Copies /db/changelog/ into shared emptyDir and exits.
+        # ── Init 1: copy-changelogs ─────────────────────────────────────────
+        # Runs the SERVICE image with its entrypoint replaced by a plain `cp`.
+        # The JVM never starts; no Spring context; no application code runs.
+        # Copies /db/changelog/ (baked into the service image) into the shared
+        # emptyDir at /changelogs and exits 0.
+        # Must match the image tag in the Deployment.
         - name: copy-changelogs
           image: hashvelani/reference-service-internal:v0.1.6
           command: ["cp", "-r", "/db/changelog/.", "/changelogs/"]
@@ -64,11 +106,14 @@ spec:
             - name: changelogs
               mountPath: /changelogs
 
-        # ── Step 2: Platform logic ──────────────────────────────────────────
-        # Runs AFTER copy-changelogs completes successfully.
-        # Reads /changelogs (emptyDir populated by step 1).
-        # Phase 1: verifies files, writes action decision.
-        # Phase 2: region detection + forward/rollback logic.
+        # ── Init 2: init-changelogs ─────────────────────────────────────────
+        # Runs AFTER copy-changelogs exits 0.
+        # CHANGELOG_SOURCE_PATH == CHANGELOG_DEST_PATH == /changelogs because
+        # the file copy was already done above.  The platform container detects
+        # src == dest and skips the copy step (self-copy guard), then:
+        #   • Counts changeset elements in the XML files under /changelogs.
+        #   • Queries DATABASECHANGELOG to count applied changesets.
+        #   • Writes {update|none} to /changelogs/migration-action.txt.
         - name: init-changelogs
           image: hashvelani/platform-k8s-db-migrator:0.1.4
           env:
@@ -93,11 +138,13 @@ spec:
               mountPath: /changelogs
 
       containers:
-        # ── Step 3: Run Liquibase ───────────────────────────────────────────
-        # Runs AFTER both init containers complete successfully.
-        # Reads changelogs from emptyDir populated by step 1.
-        # Connects using admin credentials — DDL privileges required.
-        # Runs liquibase update — applies any pending changesets.
+        # ── Main: liquibase ─────────────────────────────────────────────────
+        # Runs AFTER both init containers exit 0.
+        # Reads /changelogs/migration-action.txt written by init-changelogs:
+        #   update → runs `liquibase update` to apply pending changesets.
+        #   none   → DB already up to date; skips Liquibase; exits 0.
+        # Connects with DDL-privileged admin credentials from the Secret.
+        # Pin to an immutable tag — never use `latest` (supply-chain risk).
         - name: liquibase
           image: liquibase/liquibase:4.29.2
           args:
